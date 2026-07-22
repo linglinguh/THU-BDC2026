@@ -9,9 +9,8 @@ import os
 import sys
 import subprocess
 import threading
-import json
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import messagebox, scrolledtext
 from datetime import datetime
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -127,14 +126,80 @@ def run_subprocess(script_path):
 
 
 # ============================================================
+# 步骤进度条组件（替代 tkinter 的 indeterminate 滑块）
+# ============================================================
+class StepProgress(tk.Frame):
+	"""自定义步骤进度条：显示圆形节点 + 连线 + 步骤名 + 状态"""
+	CIRCLE_R = 12    # 圆半径
+	GAP = 80         # 节点间距
+
+	def __init__(self, parent, steps, colors):
+		super().__init__(parent, bg=colors['card'])
+		self.colors = colors
+		self.steps = steps   # list of str
+		self.statuses = ['pending'] * len(steps)  # pending | active | done
+		self.canvas = tk.Canvas(self, bg=colors['card'], highlightthickness=0,
+								height=70, width=len(steps) * self.GAP + 40)
+		self.canvas.pack()
+		self._draw()
+
+	def set_step(self, index, status):
+		"""设置第 index 步的状态: 'pending' | 'active' | 'done'"""
+		if 0 <= index < len(self.statuses):
+			self.statuses[index] = status
+		self._draw()
+
+	def reset(self):
+		self.statuses = ['pending'] * len(self.steps)
+		self._draw()
+
+	def _draw(self):
+		c = self.canvas
+		c.delete('all')
+		n = len(self.steps)
+		x0 = 30
+		y = 30
+
+		for i in range(n):
+			x = x0 + i * self.GAP
+			# 连线（到下一个节点）
+			if i < n - 1:
+				nx = x0 + (i + 1) * self.GAP
+				line_color = self.colors['success'] if self.statuses[i] == 'done' else self.colors['border']
+				c.create_line(x + self.CIRCLE_R, y, nx - self.CIRCLE_R, y,
+							fill=line_color, width=3)
+
+			# 圆形节点
+			st = self.statuses[i]
+			if st == 'done':
+				fill, outline, text = self.colors['success'], self.colors['success'], '✓'
+			elif st == 'active':
+				fill, outline, text = self.colors['primary'], self.colors['primary'], str(i + 1)
+			else:
+				fill, outline, text = self.colors['card'], self.colors['border'], str(i + 1)
+
+			c.create_oval(x, y - self.CIRCLE_R, x + self.CIRCLE_R * 2, y + self.CIRCLE_R,
+						fill=fill, outline=outline, width=3)
+			c.create_text(x + self.CIRCLE_R, y, text=text,
+						fill='white' if st != 'pending' else self.colors['text3'],
+						font=('Microsoft YaHei UI', 10, 'bold'))
+
+			# 步骤名
+			lbl_color = self.colors['text'] if st != 'pending' else self.colors['text3']
+			c.create_text(x + self.CIRCLE_R, y + 28, text=self.steps[i],
+						fill=lbl_color, font=('Microsoft YaHei UI', 8),
+						anchor='center')
+
+
+# ============================================================
 # UI 主窗口
 # ============================================================
 class ScoreApp:
 	def __init__(self, root):
 		self.root = root
 		self.root.title('BDC2026 成绩对比工具')
-		self.root.geometry('1050x760')
-		self.root.minsize(950, 650)
+		self.root.geometry('1050x800')
+		self.root.minsize(950, 680)
 
 		self.C = {
 			'bg': '#0f172a',
@@ -173,7 +238,7 @@ class ScoreApp:
 
 		title_right = tk.Frame(hdr, bg=self.C['bg'])
 		title_right.pack(side='right')
-		self.version_label = tk.Label(title_right, text='v2.0', font=('Consolas', 9),
+		self.version_label = tk.Label(title_right, text='v2.1', font=('Consolas', 9),
 									fg=self.C['text3'], bg=self.C['bg'])
 		self.version_label.pack(side='right', padx=5)
 
@@ -301,13 +366,13 @@ class ScoreApp:
 		self.btn_history = self._make_btn(card, '📉  打开历史趋势', self._on_show_history, self.C['pink'], 9)
 		self.btn_history.pack(fill='x', pady=3)
 
-		# 进度指示
+		# 步骤进度条
 		pcard = self._make_card(parent)
 		self.progress_var = tk.StringVar(value='空闲')
-		tk.Label(pcard, textvariable=self.progress_var, font=('Microsoft YaHei UI', 9),
-				fg=self.C['text2'], bg=self.C['card']).pack(anchor='w', pady=(0, 4))
-		self.progress = ttk.Progressbar(pcard, mode='indeterminate', length=200)
-		self.progress.pack(fill='x')
+		tk.Label(pcard, textvariable=self.progress_var, font=('Microsoft YaHei UI', 9, 'bold'),
+				fg=self.C['text'], bg=self.C['card']).pack(anchor='w', pady=(0, 6))
+		self.stepper = StepProgress(pcard, steps=['预测', '评分', '图表'], colors=self.C)
+		self.stepper.pack()
 
 		# 快捷提示
 		tcard = self._make_card(parent)
@@ -355,16 +420,27 @@ class ScoreApp:
 	def _clear_log(self):
 		self.log.delete('1.0', 'end')
 
-	def _busy(self, on=True, msg=''):
+	def _busy(self, on=True, step=None, msg=''):
+		"""设置忙碌状态。step 为当前激活步骤索引 (0/1/2)，msg 为状态文字"""
 		for b in [self.btn_full, self.btn_predict, self.btn_score, self.btn_chart, self.btn_history]:
 			b.configure(state='disabled' if on else 'normal')
 		if on:
+			self.stepper.reset()
 			self.progress_var.set(msg)
-			self.progress.start(10)
+			if step is not None:
+				self.stepper.set_step(step, 'active')
 		else:
+			self.stepper.reset()
 			self.progress_var.set('空闲')
-			self.progress.stop()
 		self.root.update_idletasks()
+
+	def _step_done(self, index):
+		"""标记某步骤完成"""
+		self.stepper.set_step(index, 'done')
+
+	def _step_active(self, index):
+		"""标记某步骤进行中"""
+		self.stepper.set_step(index, 'active')
 
 	# ---- 评分刷新（不跑子进程） ----
 	def _refresh_scores(self):
@@ -388,9 +464,12 @@ class ScoreApp:
 		self._refresh_history()
 
 	def _on_refresh_score(self):
+		self._busy(True, step=1, msg='正在计算评分 ...')
 		self._log('📋 刷新评分...')
 		self._refresh_scores()
+		self._step_done(1)
 		self._log('✅ 评分刷新完成')
+		self.root.after(500, lambda: self._busy(False))
 
 	def _refresh_history(self):
 		df = load_history()
@@ -408,7 +487,7 @@ class ScoreApp:
 
 	# ---- 预测 ----
 	def _on_predict(self):
-		self._busy(True, '正在预测...')
+		self._busy(True, step=0, msg='模型预测中 ...')
 		self._log('▶ 开始运行 predict.py ...')
 
 		def cb(output, ok):
@@ -416,32 +495,39 @@ class ScoreApp:
 				if line.strip():
 					self._log(line)
 			if ok:
+				self._step_done(0)
 				self._log('✅ 预测完成')
 				self._refresh_scores()
 			else:
 				self._log('❌ 预测失败')
-			self._busy(False)
+			self.root.after(500, lambda: self._busy(False))
 
 		script = os.path.join(PROJECT_ROOT, 'code', 'src', 'predict.py')
 		threading.Thread(target=lambda: cb(*run_subprocess(script)), daemon=True).start()
 
 	# ---- 一键流水线 ----
 	def _on_full_pipeline(self):
-		self._busy(True, 'Step 1/2: 预测中...')
+		self._busy(True, step=0, msg='① 模型预测中 ...')
 		self._log('🚀 一键流水线启动')
 
 		def step2(output, ok):
 			for line in output.strip().split('\n')[-6:]:
 				if line.strip():
 					self._log(line)
-			self._busy(True, 'Step 2/2: 生成图表...')
 			if ok:
-				self._log('✅ 预测完成，生成图表...')
+				self._step_done(0)
+				self._busy(True, step=1, msg='② 生成图表和评分 ...')
+				self._log('✅ 预测完成，生成图表和评分 ...')
 				chart_script = os.path.join(PROJECT_ROOT, 'test', 'visualize_score.py')
 
 				def chart_cb(cout, cok):
+					self._step_done(1)
+					self._busy(True, step=2, msg='③ 刷新成绩 ...')
 					self._log('📊 图表已生成' if cok else '⚠ 图表生成失败')
-					self._busy(False)
+					# 标记第三步完成
+					self._step_done(2)
+					# 短暂显示完成状态
+					self.root.after(600, lambda: self._busy(False))
 					self._refresh_scores()
 					self._log('🎉 流水线完成')
 					self._refresh_history()
@@ -478,7 +564,7 @@ class ScoreApp:
 if __name__ == '__main__':
 	root = tk.Tk()
 	root.update_idletasks()
-	w, h = 1050, 760
+	w, h = 1050, 800
 	sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
 	root.geometry(f'{w}x{h}+{(sw-w)//2}+{(sh-h)//2}')
 	ScoreApp(root)
