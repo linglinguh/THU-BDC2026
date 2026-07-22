@@ -22,8 +22,8 @@ from datetime import datetime
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RESULT_PATH = os.path.join(PROJECT_ROOT, 'output', 'result.csv')
 TEST_DATA_PATH = os.path.join(PROJECT_ROOT, 'data', 'test.csv')
-HISTORY_PATH = os.path.join(PROJECT_ROOT, 'test', 'score_history.csv')
-FIG_PATH = os.path.join(PROJECT_ROOT, 'test', 'score_comparison.png')
+HISTORY_PATH = os.path.join(PROJECT_ROOT, 'tools', 'score_visualizer', 'history.csv')
+FIG_PATH = os.path.join(PROJECT_ROOT, 'tools', 'score_visualizer', 'comparison.png')
 
 
 def calculate_return(group):

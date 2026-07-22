@@ -560,12 +560,18 @@ class ScoreApp:
 				self._step_done(0)
 				self._busy(True, step=1, msg='② 生成图表和评分 ...')
 				self._log('✅ 预测完成，生成图表和评分 ...')
-				chart_script = os.path.join(PROJECT_ROOT, 'test', 'visualize_score.py')
+				chart_script = os.path.join(PROJECT_ROOT, 'tools', 'score_visualizer', 'visualize.py')
 
 				def chart_cb(cout, cok):
 					self._step_done(1)
 					self._busy(True, step=2, msg='③ 刷新成绩 ...')
-					self._log('📊 图表已生成' if cok else '⚠ 图表生成失败')
+					if cok:
+						self._log('📊 图表已生成')
+					else:
+						self._log('⚠ 图表生成失败，以下是详细输出:')
+						for line in cout.split('\n')[:10]:
+							if line.strip():
+								self._log(f'  {line}')
 					# 标记第三步完成
 					self._step_done(2)
 					# 短暂显示完成状态
