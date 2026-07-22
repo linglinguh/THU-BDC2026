@@ -47,7 +47,8 @@ def calc_weighted_score(output_df, test_data):
 	if len(output_data) > 5:
 		return -999.0
 	weight_sum = float(output_data['权重'].sum())
-	if not (0 <= weight_sum <= 1.0):
+	# 浮点精度容差: 允许 1.0 + 1e-6 (如 1.00000004)
+	if not (-1e-9 <= weight_sum <= 1.0 + 1e-6):
 		return -999.0
 
 	# 筛选测试数据

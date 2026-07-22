@@ -376,10 +376,14 @@ def main():
 		)
 		top5, top5_scores = filter_candidates(ranked_stock_ids, ranked_scores, metrics, config)
 
-	# softmax 不等权分配
+	# softmax 不等权分配（带浮点精度保护）
 	temperature = config.get('predict_temperature', 1.0)
 	exp_scores = np.exp(top5_scores / max(temperature, 1e-6))
-	weights = exp_scores / exp_scores.sum()  # 权重自动归一化，和为1
+	weights = exp_scores / exp_scores.sum()
+	# 四舍五入到6位小数，防止浮点精度导致 weight_sum > 1.0（会触发 -999 评分）
+	weights = np.round(weights, 6)
+	if weights.sum() > 1.0:
+		weights[-1] -= weights.sum() - 1.0
 
 	output_df = pd.DataFrame({
 		'stock_id': top5,
