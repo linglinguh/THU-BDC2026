@@ -1,13 +1,16 @@
-FROM nvidia/cuda:12.2.0-cudnn8-runtime-ubuntu22.04
+FROM python:3.12-slim-bookworm
 
-# 基础工具
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
-    python3.10 python3.10-dev python3.10-venv python3-pip \
-    gcc g++ make wget tar \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/python3.10 /usr/bin/python
+    gcc \
+    g++ \
+    make \
+    wget \
+    tar \
+    && rm -rf /var/lib/apt/lists/*
 
-# 安装 TA-Lib C 库
+# Install ta-lib C library
+# Source: http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
 RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
     tar -xzf ta-lib-0.4.0-src.tar.gz && \
     cd ta-lib && \
@@ -17,22 +20,24 @@ RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
     cd .. && \
     rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
-# 安装 uv
+# Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# 工作目录
+# Set working directory
 WORKDIR /app
 
-# 依赖文件
+# Copy dependency files
 COPY pyproject.toml uv.lock ./
+
+# Install dependencies
 RUN uv sync --frozen
 
-# 代码
+# Copy the application code
 COPY . .
 
-# 虚拟环境路径
+# Set environment to use the virtual environment
 ENV PATH="/app/.venv/bin:$PATH"
 ENV LD_LIBRARY_PATH="/usr/lib:/usr/local/lib"
 
-# 赛事方评测时执行 data/run.sh（init + train + test）
+# Keep container running idle; execute train/predict manually via docker exec.
 CMD ["sleep", "infinity"]
