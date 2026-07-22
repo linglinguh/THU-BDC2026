@@ -590,7 +590,7 @@ class ScoreApp:
 
 	# ---- 图表 ----
 	def _on_show_chart(self):
-		fp = os.path.join(PROJECT_ROOT, 'test', 'score_comparison.png')
+		fp = os.path.join(PROJECT_ROOT, 'tools', 'score_visualizer', 'comparison.png')
 		if os.path.exists(fp):
 			os.startfile(fp)
 			self._log('📈 已打开对比图表')
@@ -598,7 +598,7 @@ class ScoreApp:
 			messagebox.showinfo('提示', '图表尚未生成，请先运行评分。')
 
 	def _on_show_history(self):
-		fp = os.path.join(PROJECT_ROOT, 'test', 'score_history.png')
+		fp = os.path.join(PROJECT_ROOT, 'tools', 'score_visualizer', 'history.png')
 		if os.path.exists(fp):
 			os.startfile(fp)
 			self._log('📉 已打开历史趋势图')
