@@ -23,4 +23,7 @@ config = {
 
     # 混合精度训练 (AMP)，显存减半，4GB显卡也能跑batch=2~4
     'use_amp': True,
+
+    # 推理时权重分配的 softmax 温度：越小越集中（接近 max=1），越大越均匀（趋近等权0.2）
+    'predict_temperature': 1.0,
 }

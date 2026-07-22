@@ -146,18 +146,25 @@ def main():
 	order = np.argsort(scores)[::-1]
 	ranked_stock_ids = [sequence_stock_ids[i] for i in order]
 
-	# 仅输出前5，权重固定 0.2
+	# 取 Top5，按预测分数不等权分配（softmax + temperature）
 	if len(ranked_stock_ids) < 5:
 		raise ValueError(f'可预测股票不足5只，当前仅有 {len(ranked_stock_ids)} 只')
 	top5 = ranked_stock_ids[:5]
+	top5_scores = scores[order[:5]]
+
+	temperature = config.get('predict_temperature', 1.0)
+	exp_scores = np.exp(top5_scores / max(temperature, 1e-6))
+	weights = exp_scores / exp_scores.sum()  # 权重自动归一化，和为1
+
 	output_df = pd.DataFrame({
 		'stock_id': top5,
-		'weight': [0.2] * len(top5),
+		'weight': weights,
 	})
 	output_df.to_csv(output_path, index=False)
 
 	print(f'预测日期: {latest_date.date()}')
 	print(f'参与排序股票数: {len(ranked_stock_ids)}')
+	print(f'Top5 权重: {dict(zip(top5, [f"{w:.4f}" for w in weights]))}')
 	print(f'结果已写入: {output_path}')
 
 
