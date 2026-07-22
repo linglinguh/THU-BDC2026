@@ -3,13 +3,13 @@
 
 功能:
 1. 用基准逻辑(等权0.2, 无后处理)和当前系统逻辑分别评分
-2. 记录历史实验到 test/score_history.csv
-3. 绘制对比图表保存到 test/score_comparison.png
+2. 记录历史实验到 tools/score_visualizer/history.csv
+3. 绘制对比图表保存到 tools/score_visualizer/comparison.png
 
 用法:
-  python test/visualize_score.py              # 评分当前 output/result.csv 并记录
-  python test/visualize_score.py --no-record  # 仅评分不记录历史
-  python test/visualize_score.py --view       # 仅查看历史趋势图
+  python tools/score_visualizer/visualize.py                  # 评分当前 output/result.csv 并记录
+  python tools/score_visualizer/visualize.py --no-record      # 仅评分不记录历史
+  python tools/score_visualizer/visualize.py --view           # 仅查看历史趋势图
 """
 import os
 import sys

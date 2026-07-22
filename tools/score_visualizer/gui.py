@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 r"""
-成绩对比可视化桌面应用 v2.0
+成绩对比可视化桌面应用 v2.1
 
 用法:
-  python test/score_gui.py
+  python tools/score_visualizer/gui.py
 """
 import os
 import sys
