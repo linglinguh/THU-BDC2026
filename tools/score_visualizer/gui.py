@@ -112,17 +112,59 @@ def load_history():
 	return df if len(df) > 0 else None
 
 
-def run_subprocess(script_path):
-	"""运行子脚本并返回 (输出文本, 是否成功)"""
+def clean_log_output(text):
+	"""清洗子进程输出，去除 tqdm 进度条、警告、不可显示字符。
+
+	保留: 状态信息、错误消息、关键输出。
+	"""
+	import re
+
+	# 按行处理
+	cleaned_lines = []
+	for line in text.split('\n'):
+		# 跳过 tqdm 进度条行（含 \\r 或 it/s] 模式）
+		if '\r' in line:
+			# tqdm 用 \\r 覆盖同一行，取最后一个 \\r 后的内容
+			line = line.split('\r')[-1]
+		# 跳过 tqdm 进度模式（百分比/it/s）
+		if re.search(r'\d+%\|\S*\|', line) or re.search(r'\d+\.\d+it/s', line):
+			continue
+		# 跳过 pandas FutureWarning
+		if 'FutureWarning' in line or 'DeprecationWarning' in line:
+			continue
+		# 去除 ANSI 转义码
+		line = re.sub(r'\x1b\[[0-9;]*m', '', line)
+		# 去除不可打印字符（保留中文、英文、数字、标点）
+		line = re.sub(r'[^\w\s\u4e00-\u9fff.,;:!?(){}\[\]<>+\-*/=@#$%^&|"\'\\~`]', '', line)
+		# 跳过空行
+		line = line.strip()
+		if not line:
+			continue
+		cleaned_lines.append(line)
+
+	return '\n'.join(cleaned_lines)
+
+
+def run_subprocess(script_path, hide_progress=True):
+	"""运行子脚本并返回 (清洗后的输出文本, 是否成功)"""
 	cmd = [VENV_PYTHON, script_path]
+	# 抑制 tqdm 进度条，让日志更干净
+	env = os.environ.copy()
+	if hide_progress:
+		env['TQDM_DISABLE'] = '1'
+		env['PYTHONIOENCODING'] = 'utf-8'
+
 	try:
 		result = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True,
-								encoding='utf-8', errors='replace', timeout=600)
-		return result.stdout + '\n' + result.stderr, result.returncode == 0
+								encoding='utf-8', errors='replace', timeout=600,
+								env=env)
+		raw_output = result.stdout + '\n' + result.stderr
+		cleaned = clean_log_output(raw_output)
+		return cleaned if cleaned else '(执行完成，无输出)', result.returncode == 0
 	except subprocess.TimeoutExpired:
-		return '执行超时', False
+		return '执行超时 (>10分钟)', False
 	except Exception as e:
-		return str(e), False
+		return f'执行异常: {e}', False
 
 
 # ============================================================
