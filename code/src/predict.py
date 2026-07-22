@@ -93,6 +93,89 @@ def build_inference_sequences(data, features, sequence_length, stock_ids, latest
 	return np.asarray(sequences, dtype=np.float32), sequence_stock_ids
 
 
+def compute_stock_metrics(raw_df, stock_ids, latest_date, momentum_days, volatility_days):
+	"""计算候选股票的近期待征：动量（累计涨跌幅）和波动率（日均振幅）。
+
+	数据来源: train.csv 的 涨跌幅 / 最高 / 最低 / 开盘 列，不依赖外部数据。
+	"""
+	metrics = {}
+	for sid in stock_ids:
+		hist = raw_df[
+			(raw_df['股票代码'] == sid) & (raw_df['日期'] <= latest_date)
+		].sort_values('日期').tail(max(momentum_days, volatility_days))
+
+		if len(hist) < momentum_days:
+			momentum = 0.0
+		else:
+			# 近 N 日累计涨跌幅 = (1+r1)(1+r2)...(1+rN) - 1
+			recent = hist.tail(momentum_days)
+			momentum = float((1 + recent['涨跌幅'] / 100).prod() - 1)
+
+		if len(hist) < volatility_days:
+			volatility = 0.0
+		else:
+			recent = hist.tail(volatility_days)
+			# 日均振幅 = mean((最高 - 最低) / 开盘)
+			spread = (recent['最高'] - recent['最低']) / recent['开盘']
+			volatility = float(spread.mean())
+
+		metrics[sid] = {'momentum': momentum, 'volatility': volatility}
+	return metrics
+
+
+def filter_candidates(ranked_ids, ranked_scores, metrics, config):
+	"""候选池扩大 + 动量筛选 + 波动率风控 → 最终 Top5。
+
+	流程: 取 Top-N 候选 → 动量筛选(剔除下跌) → 波动率筛选(剔除高波动)
+	→ 不足5只时从候选池尾部回退补充 → 取 Top5
+	"""
+	pool_size = config.get('candidate_pool_size', 15)
+	enable_mom = config.get('enable_momentum_filter', True)
+	mom_days = config.get('momentum_lookback_days', 5)
+	enable_vol = config.get('enable_volatility_filter', True)
+	vol_days = config.get('volatility_lookback_days', 10)
+	vol_threshold = config.get('volatility_max_threshold', 0.15)
+
+	candidates = ranked_ids[:pool_size]
+	cand_scores = ranked_scores[:pool_size]
+
+	# 动量筛选
+	if enable_mom:
+		filtered = [(sid, sc) for sid, sc in zip(candidates, cand_scores)
+					if metrics[sid]['momentum'] >= 0]
+		print(f'  动量筛选: {len(candidates)} → {len(filtered)} 只 (剔除近{mom_days}日下跌)')
+	else:
+		filtered = list(zip(candidates, cand_scores))
+
+	# 波动率风控
+	if enable_vol:
+		before_vol = len(filtered)
+		filtered = [(sid, sc) for sid, sc in filtered
+					if metrics[sid]['volatility'] <= vol_threshold]
+		print(f'  波动率风控: {before_vol} → {len(filtered)} 只 (日均振幅>{vol_threshold:.0%}剔除)')
+
+	# 不足5只时从候选池尾部回退补充
+	excluded = [sid for sid in candidates if sid not in {f[0] for f in filtered}]
+	for sid in excluded:
+		if len(filtered) >= 5:
+			break
+		# 按 original score 顺序补充
+		idx = candidates.index(sid)
+		filtered.append((sid, cand_scores[idx]))
+
+	# 按模型分数降序取 Top5
+	filtered.sort(key=lambda x: -x[1])
+	top5 = [f[0] for f in filtered[:5]]
+	top5_scores = [f[1] for f in filtered[:5]]
+
+	# 打印筛选详情
+	for i, sid in enumerate(top5):
+		m = metrics[sid]
+		print(f'  Top{i+1}: {sid}  动量={m["momentum"]:+.2%}  波动={m["volatility"]:.2%}')
+
+	return top5, np.array(top5_scores)
+
+
 def main():
 	data_file = os.path.join(config['data_path'], 'train.csv')
 	model_path = os.path.join(config['output_dir'], 'best_model.pth')
@@ -145,13 +228,22 @@ def main():
 
 	order = np.argsort(scores)[::-1]
 	ranked_stock_ids = [sequence_stock_ids[i] for i in order]
+	ranked_scores = scores[order]
 
-	# 取 Top5，按预测分数不等权分配（softmax + temperature）
 	if len(ranked_stock_ids) < 5:
 		raise ValueError(f'可预测股票不足5只，当前仅有 {len(ranked_stock_ids)} 只')
-	top5 = ranked_stock_ids[:5]
-	top5_scores = scores[order[:5]]
 
+	# --- 推理后处理：候选池扩大 + 动量筛选 + 波动率风控 ---
+	pool_size = config.get('candidate_pool_size', 15)
+	print(f'\n=== 后处理筛选 (候选池 Top-{pool_size}) ===')
+	metrics = compute_stock_metrics(
+		raw_df, ranked_stock_ids[:pool_size], latest_date,
+		config.get('momentum_lookback_days', 5),
+		config.get('volatility_lookback_days', 10),
+	)
+	top5, top5_scores = filter_candidates(ranked_stock_ids, ranked_scores, metrics, config)
+
+	# softmax 不等权分配
 	temperature = config.get('predict_temperature', 1.0)
 	exp_scores = np.exp(top5_scores / max(temperature, 1e-6))
 	weights = exp_scores / exp_scores.sum()  # 权重自动归一化，和为1
@@ -162,7 +254,7 @@ def main():
 	})
 	output_df.to_csv(output_path, index=False)
 
-	print(f'预测日期: {latest_date.date()}')
+	print(f'\n预测日期: {latest_date.date()}')
 	print(f'参与排序股票数: {len(ranked_stock_ids)}')
 	print(f'Top5 权重: {dict(zip(top5, [f"{w:.4f}" for w in weights]))}')
 	print(f'结果已写入: {output_path}')

@@ -26,4 +26,15 @@ config = {
 
     # 推理时权重分配的 softmax 温度：越小越集中（接近 max=1），越大越均匀（趋近等权0.2）
     'predict_temperature': 1.0,
+
+    # --- 推理后处理策略 ---
+    # 候选池大小：从模型排名 Top-N 中做二次筛选，再取最终 Top5
+    'candidate_pool_size': 15,
+    # 动量筛选：剔除近期下跌的股票（近 N 日累计涨跌幅 < 0）
+    'enable_momentum_filter': True,
+    'momentum_lookback_days': 5,
+    # 波动率风控：剔除近期波动过大的股票（日均振幅超阈值）
+    'enable_volatility_filter': True,
+    'volatility_lookback_days': 10,
+    'volatility_max_threshold': 0.15,  # 日均振幅上限 15%
 }
