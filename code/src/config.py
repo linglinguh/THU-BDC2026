@@ -30,11 +30,21 @@ config = {
     # --- 推理后处理策略 ---
     # 候选池大小：从模型排名 Top-N 中做二次筛选，再取最终 Top5
     'candidate_pool_size': 15,
-    # 动量筛选：剔除近期下跌的股票（近 N 日累计涨跌幅 < 0）
+
+    # 多因子评分模式（启用后替代简单筛选，对候选池各因子 z-score 后加权融合）
+    'enable_multi_factor': True,
+    # 模型分数在综合评分中的权重（剩余权重分配给各因子）
+    'multi_factor_model_weight': 0.50,
+    'multi_factor_momentum_weight': 0.15,   # 近5日动量
+    'multi_factor_reversal_weight': 0.05,   # 近3日反转（均值回归）
+    'multi_factor_volatility_weight': 0.15, # 波动率（逆向，低波更优）
+    'multi_factor_liquidity_weight': 0.05,  # 换手率（中性，极端值扣分）
+    'multi_factor_volume_weight': 0.10,     # 成交量比（中性，极端值扣分）
+
+    # 单因子筛选模式（enable_multi_factor=False 时生效，向后兼容）
     'enable_momentum_filter': True,
     'momentum_lookback_days': 5,
-    # 波动率风控：剔除近期波动过大的股票（日均振幅超阈值）
     'enable_volatility_filter': True,
     'volatility_lookback_days': 10,
-    'volatility_max_threshold': 0.15,  # 日均振幅上限 15%
+    'volatility_max_threshold': 0.15,
 }

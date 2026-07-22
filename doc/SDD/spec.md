@@ -425,6 +425,7 @@ experiment/xxx  — 实验性改动（如 experiment/different-loss）
 | 方向 | 改动文件 | 是否需要重训 | 预期收益 |
 |---|---|---|---|
 | **权重不等权分配** | predict.py | ❌ 不需要 | ⭐⭐⭐⭐ |
+| **多因子评分融合** | predict.py + config.py | ❌ 不需要 | ⭐⭐⭐⭐ |
 | **行业分散约束** | predict.py | ❌ 不需要 | ⭐⭐⭐ |
 | **扩大候选池+二次筛选** | predict.py | ❌ 不需要 | ⭐⭐ |
 | **波动率风控** | predict.py | ❌ 不需要 | ⭐ |

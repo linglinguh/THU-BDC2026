@@ -124,7 +124,7 @@ def compute_stock_metrics(raw_df, stock_ids, latest_date, momentum_days, volatil
 
 
 def filter_candidates(ranked_ids, ranked_scores, metrics, config):
-	"""候选池扩大 + 动量筛选 + 波动率风控 → 最终 Top5。
+	"""候选池扩大 + 动量筛选 + 波动率风控 → 最终 Top5（单因子硬筛选模式）。
 
 	流程: 取 Top-N 候选 → 动量筛选(剔除下跌) → 波动率筛选(剔除高波动)
 	→ 不足5只时从候选池尾部回退补充 → 取 Top5
@@ -174,6 +174,128 @@ def filter_candidates(ranked_ids, ranked_scores, metrics, config):
 		print(f'  Top{i+1}: {sid}  动量={m["momentum"]:+.2%}  波动={m["volatility"]:.2%}')
 
 	return top5, np.array(top5_scores)
+
+
+# ============================================================
+# 多因子评分引擎（替代硬筛选，更精确的量化排序）
+# ============================================================
+def compute_factor_scores(raw_df, stock_ids, latest_date):
+	"""为候选池每只股票计算 5 个因子原始值。
+
+	返回: {stock_id: {'momentum':, 'reversal':, 'volatility':,
+	                   'liquidity':, 'volume_ratio':}}
+	数据来源: train.csv，不依赖外部数据。
+	"""
+	factors = {}
+	for sid in stock_ids:
+		hist = raw_df[
+			(raw_df['股票代码'] == sid) & (raw_df['日期'] <= latest_date)
+		].sort_values('日期')
+
+		if len(hist) < 20:
+			# 数据不足，填0
+			factors[sid] = {'momentum': 0.0, 'reversal': 0.0, 'volatility': 0.0,
+							'liquidity': 0.0, 'volume_ratio': 1.0}
+			continue
+
+		# 动量因子：近5日累计涨跌幅
+		mom_data = hist.tail(5)
+		momentum = float((1 + mom_data['涨跌幅'] / 100).prod() - 1)
+
+		# 反转因子：近3日累计涨跌幅（取反，均值回归信号）
+		rev_data = hist.tail(3)
+		reversal = -float((1 + rev_data['涨跌幅'] / 100).prod() - 1)
+
+		# 波动率因子：近10日均振幅（取反，低波更优）
+		vol_data = hist.tail(10)
+		vol_spread = (vol_data['最高'] - vol_data['最低']) / vol_data['开盘']
+		volatility = -float(vol_spread.mean())
+
+		# 流动性因子：近10日均换手率（中性，极高或极低都不好）
+		liq_data = hist.tail(10)
+		liquidity = float(liq_data['换手率'].mean())
+
+		# 成交量比：近5日均量 / 近20日均量
+		vol5 = hist.tail(5)['成交量'].mean()
+		vol20 = hist.tail(min(20, len(hist)))['成交量'].mean()
+		volume_ratio = float(vol5 / vol20) if vol20 > 0 else 1.0
+
+		factors[sid] = {
+			'momentum': momentum,
+			'reversal': reversal,
+			'volatility': volatility,
+			'liquidity': liquidity,
+			'volume_ratio': volume_ratio,
+		}
+	return factors
+
+
+def multi_factor_ranking(ranked_ids, ranked_scores, factor_data, config):
+	"""多因子评分融合 → 候选池排序 → Top5。
+
+	对每个因子做 z-score 标准化后加权求和（含模型分数），综合分排序取 Top5。
+	"""
+	pool_size = config.get('candidate_pool_size', 15)
+	candidates = ranked_ids[:pool_size]
+	cand_scores = ranked_scores[:pool_size]
+
+	# 读取因子权重
+	w_model = config.get('multi_factor_model_weight', 0.50)
+	w_mom = config.get('multi_factor_momentum_weight', 0.15)
+	w_rev = config.get('multi_factor_reversal_weight', 0.05)
+	w_vol = config.get('multi_factor_volatility_weight', 0.15)
+	w_liq = config.get('multi_factor_liquidity_weight', 0.05)
+	w_vr = config.get('multi_factor_volume_weight', 0.10)
+
+	# 提取各因子原始值
+	n = len(candidates)
+	raw = {
+		'model': np.array([cand_scores[i] for i in range(n)]),
+		'momentum': np.array([factor_data[candidates[i]]['momentum'] for i in range(n)]),
+		'reversal': np.array([factor_data[candidates[i]]['reversal'] for i in range(n)]),
+		'volatility': np.array([factor_data[candidates[i]]['volatility'] for i in range(n)]),
+		'liquidity': np.array([factor_data[candidates[i]]['liquidity'] for i in range(n)]),
+		'volume_ratio': np.array([factor_data[candidates[i]]['volume_ratio'] for i in range(n)]),
+	}
+
+	# z-score 标准化（均值为0，标准差为1），带稳定处理
+	def zscore(x):
+		std = x.std()
+		if std < 1e-9:
+			return np.zeros_like(x)
+		return (x - x.mean()) / std
+
+	z = {k: zscore(v) for k, v in raw.items()}
+
+	# 流动性因子：中间值最优，偏离均值越远扣分越多。用 -abs(z) 转化
+	z['liquidity'] = -np.abs(z['liquidity'])
+	z['volume_ratio'] = -np.abs(z['volume_ratio'])
+
+	# 加权综合分
+	composite = (
+		w_model * z['model']
+		+ w_mom * z['momentum']
+		+ w_rev * z['reversal']
+		+ w_vol * z['volatility']
+		+ w_liq * z['liquidity']
+		+ w_vr * z['volume_ratio']
+	)
+
+	# 按综合分降序取 Top5
+	idx_order = np.argsort(composite)[::-1]
+	top5 = [candidates[i] for i in idx_order[:5]]
+	top5_scores = np.array([cand_scores[i] for i in idx_order[:5]])  # 仍用原始模型分做权重
+
+	# 打印详情
+	print(f'\n  多因子融合评分 (候选池 {len(candidates)} 只)')
+	print(f'  {"股票":<8} {"模型z":>7} {"动量z":>7} {"反转z":>7} {"波动z":>7} {"流动z":>7} {"量比z":>7} {"综合":>7}')
+	print(f'  {"-"*60}')
+	for i in idx_order[:8]:
+		sid = candidates[i]
+		print(f'  {sid:<8} {z["model"][i]:>+7.2f} {z["momentum"][i]:>+7.2f} {z["reversal"][i]:>+7.2f} '
+			  f'{z["volatility"][i]:>+7.2f} {z["liquidity"][i]:>+7.2f} {z["volume_ratio"][i]:>+7.2f} {composite[i]:>+7.2f}')
+
+	return top5, top5_scores
 
 
 def main():
@@ -233,15 +355,26 @@ def main():
 	if len(ranked_stock_ids) < 5:
 		raise ValueError(f'可预测股票不足5只，当前仅有 {len(ranked_stock_ids)} 只')
 
-	# --- 推理后处理：候选池扩大 + 动量筛选 + 波动率风控 ---
+	# --- 推理后处理 ---
 	pool_size = config.get('candidate_pool_size', 15)
-	print(f'\n=== 后处理筛选 (候选池 Top-{pool_size}) ===')
-	metrics = compute_stock_metrics(
-		raw_df, ranked_stock_ids[:pool_size], latest_date,
-		config.get('momentum_lookback_days', 5),
-		config.get('volatility_lookback_days', 10),
-	)
-	top5, top5_scores = filter_candidates(ranked_stock_ids, ranked_scores, metrics, config)
+	use_multi_factor = config.get('enable_multi_factor', True)
+
+	if use_multi_factor:
+		# 多因子评分模式
+		print(f'\n=== 多因子评分 (候选池 Top-{pool_size}) ===')
+		factor_data = compute_factor_scores(raw_df, ranked_stock_ids[:pool_size], latest_date)
+		top5, top5_scores = multi_factor_ranking(
+			ranked_stock_ids, ranked_scores, factor_data, config
+		)
+	else:
+		# 单因子硬筛选模式（向后兼容）
+		print(f'\n=== 后处理筛选 (候选池 Top-{pool_size}) ===')
+		metrics = compute_stock_metrics(
+			raw_df, ranked_stock_ids[:pool_size], latest_date,
+			config.get('momentum_lookback_days', 5),
+			config.get('volatility_lookback_days', 10),
+		)
+		top5, top5_scores = filter_candidates(ranked_stock_ids, ranked_scores, metrics, config)
 
 	# softmax 不等权分配
 	temperature = config.get('predict_temperature', 1.0)
