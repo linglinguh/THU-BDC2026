@@ -1,0 +1,42 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# IDE
+.DS_Store
+.vscode
+.idea
+*.swp
+*.swo
+
+# Model weights & checkpoints (too large for git)
+*.pth
+*.pkl
+*.pt
+model/
+!model/.gitkeep
+
+# Output & temp
+output/
+temp/
+
+# TensorBoard logs
+**/log/
+**/logs/
+
+# Docker artifacts
+*.tar
+*.zip
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+Thumbs.db
