@@ -1,13 +1,52 @@
-# 股票排序预测系统 — 规格说明 (SDD)
+# 股票排序预测系统 — 软件设计规格说明书 (SDD)
 
-> **版本**: 1.0 | **最后更新**: 2026-07-22 | **基线版本**: THU-BDC2026-baseline
+> **版本**: 2.0 | **最后更新**: 2026-07-22 | **适用比赛**: 2026 中国高校计算机大赛—大数据挑战赛
+> **基线仓库**: https://github.com/Sherlock1956/THU-BDC2026
+
+---
+
+## 0. 比赛要求对标
+
+### 0.1 赛题要求（来源：竞赛通知 + 赛题描述）
+
+| 要求项 | 比赛规定 | 本系统实现 |
+|---|---|---|
+| **预测对象** | 沪深300指数成分股 | `data/hs300_stock_list.csv` |
+| **预测目标** | 未来一周（5个交易日）收益最大的股票组合 | Top5 股票 + 权重 |
+| **组合约束** | 不超过5只股票，累计权重 ≤ 1 | `predict.py` 输出 ≤5 行，weight 求和 ≤ 1 |
+| **输出格式** | `result.csv`：`stock_id, weight` | ✅ 严格匹配 |
+| **提交方式** | Docker 镜像 (.tar) + result.csv | ✅ Dockerfile + docker-compose.yml |
+| **可复现性** | 组委会用 Docker 重跑 train+predict 验证 | ✅ `data/run.sh` 链式调用 |
+| **成绩门槛** | 必须优于基准程序 | 改进点见 §5.4 |
+| **算法要求** | 必须有机器学习算法贡献 | ✅ StockTransformer 排序学习 |
+
+### 0.2 评分公式（来源：`test/score_docker.py`）
+
+```
+收益率_i = (test数据第5日开盘价 - test数据第1日开盘价) / test数据第1日开盘价
+
+Final Score = Σ_i (weight_i × 收益率_i)
+```
+
+- 预测格式不合法（列名错误/股票数>5/权重和>1）→ **-999 分**
+- 阶段排名按 Final Score 降序排列
+
+### 0.3 提交时间线
+
+| 阶段 | 时间 | 状态 |
+|---|---|---|
+| A阶段① | 4月25-26日 | ✅ 已过 |
+| A阶段② | 5月30-31日 | ✅ 已过 |
+| A阶段③ | 6月27-28日 | ✅ 已过 |
+| **B阶段** | **8月1日8:00 ~ 8月2日23:59** | 🔴 即将到来 |
+| 决赛答辩 | 8月中下旬 | — |
 
 ---
 
 ## 1. 系统概述
 
 ### 1.1 目标
-基于沪深300成分股的过去60个交易日量价与技术特征，预测未来5个交易日收益最高的股票组合（≤5只，权重之和≤1）。
+基于沪深300成分股的过去60个交易日量价与技术特征，预测未来5个交易日收益最高的股票组合（≤5只，权重之和≤1），追求 `Final Score = Σ(权重 × 收益率)` 最大化。
 
 ### 1.2 整体数据流
 
@@ -39,9 +78,28 @@
        │  stock_id + weight
        ▼
   ┌─────────────┐
-  │ 评分         │  score_self.py / score_docker.py
+  │ 评分         │  score_self.py / score_docker.py → Final Score
   └─────────────┘
-       │  Final Score (加权收益率)
+```
+
+### 1.3 Docker 执行链路（赛事方评测流程）
+
+```
+选手提交 .tar 镜像
+    │
+    ▼ 赛事方执行
+docker load → docker compose up
+    │
+    ▼ 容器内执行 data/run.sh:
+    ├── /bin/bash /app/init.sh      (环境初始化，当前为空)
+    ├── /bin/bash /app/train.sh     → python code/src/train.py
+    └── /bin/bash /app/test.sh      → python code/src/predict.py
+    │
+    ▼ 赛事方评分
+score_docker.py 读取 test/output/result.csv + data/test.csv
+    │
+    ▼
+Final Score = Σ(weight_i × 收益率_i)
 ```
 
 ---
@@ -183,29 +241,32 @@ return {
     'random_return_sum': float, # 随机选股的期望收益
     'ratio_pred': float,        # pred_return / max_return
     'ratio_random': float,      # random_return / max_return
-    'final_score': float,       # (pred - random) / (max - random)
+    'final_score': float,       # (pred - random) / (max - random) — 训练监控指标
 }
 ```
 
+> **注意**: `final_score` 是训练时的代理指标（排序能力衡量），**不是**比赛最终得分。比赛得分 = `Σ(weight × 真实5日收益率)`，见 §0.2。
+
 **产物**:
-| 文件 | 内容 |
-|---|---|
-| `best_model.pth` | 最佳模型权重（按 eval final_score） |
-| `scaler.pkl` | StandardScaler 实例 |
-| `config.json` | 训练时配置快照 |
-| `final_score.txt` | 最佳分数记录 |
-| `log/` | TensorBoard 日志 |
+| 文件 | 内容 | 是否提交 |
+|---|---|---|
+| `best_model.pth` | 最佳模型权重（按 eval final_score） | ✅ Docker 内含 |
+| `scaler.pkl` | StandardScaler 实例 | ✅ Docker 内含 |
+| `config.json` | 训练时配置快照 | ✅ 复现验证用 |
+| `final_score.txt` | 训练分数记录 | 仅供参考 |
+| `log/` | TensorBoard 日志 | 不提交（.gitignore） |
 
 **约束**:
 - 训练/验证集按时间顺序划分（`split_train_val_by_last_month`）
 - 入口使用 `mp.set_start_method('spawn')` 保护多进程
 - `drop_small_open=True` 过滤开盘价 < 1e-4 的异常样本
+- **严禁训练时使用 `data/test.csv`**（未来数据泄漏）
 
 ---
 
 ### 2.5 `code/src/predict.py` — 推理预测
 
-**职责**: 加载训练好的模型，对未来5个交易日进行预测，输出 stock_id + weight。
+**职责**: 加载训练好的模型，对未来5个交易日进行预测，输出 `stock_id + weight`。
 
 **输入**:
 - `data/train.csv` — 历史数据（包含到最新交易日）
@@ -214,17 +275,18 @@ return {
 
 **输出**: `output/result.csv`
 
-| 列名 | 类型 | 约束 |
-|---|---|---|
-| `stock_id` | str (6位) | 最多5行 |
-| `weight` | float | 每行0~1，所有行之和≤1 |
+| 列名 | 类型 | 约束 | 违反后果 |
+|---|---|---|---|
+| `stock_id` | str (6位) | 最多5行 | -999 分 |
+| `weight` | float | 每行0~1，所有行之和≤1 | -999 分 |
 
-**权重分配**: softmax(score / temperature)，自动归一化。
+**权重分配**: softmax(score / temperature)，自动归一化，和为1。
 
 **约束**:
-- 输出格式必须严格匹配（列名 `stock_id`、`weight`）
+- 输出格式必须严格匹配（列名 `stock_id`、`weight`，**不能写成中文**）
 - ≤5 只股票，权重之和 ∈ [0, 1]，否则评分脚本返回 -999
 - 特征工程必须与训练时一致（`feature_num` 相同）
+- 输出路径固定为 `output/result.csv`（Docker 通过 volume 映射到 `test/output/`）
 
 ---
 
@@ -239,6 +301,7 @@ return {
 - `股票代码`: str, 6位数字
 - `日期`: str, `YYYY-MM-DD` 格式
 - 数值列: float
+- 评分脚本只使用 `股票代码`、`日期`、`开盘` 三列计算收益率
 
 ### 3.2 训练数据 (`data/train.csv`)
 
@@ -246,7 +309,9 @@ return {
 
 ### 3.3 测试数据 (`data/test.csv`)
 
-最后5个交易日数据。格式同上。**仅评分时使用，不能用于训练**。
+最后5个交易日数据。格式同上。
+
+> **⚠️ 严禁用于训练**。评分时 `score_docker.py` 会读取此文件计算真实收益率。
 
 ### 3.4 特征集
 
@@ -262,6 +327,12 @@ high_low_spread, open_close_spread, high_close_spread, low_close_spread
 **158+39 特征** (`feature_num='158+39'`):
 上述39个 + 158个 Alpha 类特征（ROC, MA, STD, BETA, RSQR, MAX, MIN, QTLU, QTLD, RANK, RSV, IMAX, IMIN, IMXD, CORR, CORD, CNTP, CNTN, CNTD, SUMP, SUMN, SUMD, VMA, VSTD, WVMA, VSUMP, VSUMN, VSUMD，每种 × 5个时间窗口: 5, 10, 20, 30, 60 = 29类 × 5窗口 = 145个，加开盘价特征 KMID, KLEN, KMID2, KUP, KUP2, KLOW, KLOW2, KSFT, KSFT2, OPEN0, HIGH0, LOW0, VWAP0 共13个）= 158个
 
+### 3.5 股票代码规范
+
+- 6位数字字符串（如 `000001`）
+- `predict.py` 中使用 `.str.zfill(6)` 补齐
+- 评分时必须与 `data/test.csv` 中的 `股票代码` 完全匹配
+
 ---
 
 ## 4. Docker 部署规格
@@ -271,31 +342,54 @@ high_low_spread, open_close_spread, high_close_spread, low_close_spread
 ```
 docker compose up
   → data/run.sh 执行:
-    1. /bin/bash /app/init.sh      (空)
-    2. /bin/bash /app/test.sh      → python code/src/predict.py
+    1. /bin/bash /app/init.sh      (环境初始化，当前为空)
+    2. /bin/bash /app/train.sh     → python code/src/train.py
+    3. /bin/bash /app/test.sh      → python code/src/predict.py
   → output/result.csv 生成
 ```
 
+> **注意**: 赛事方评测时会**完整执行训练+推理**，不能只提交预训练权重。
+
 ### 4.2 资源限制
 
-```
-GPU: NVIDIA (runtime: nvidia)
-CPU: 10核
-内存: 16GB
-超时: 8小时
+```yaml
+# docker-compose.yml
+runtime: nvidia
+deploy:
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: 1
+          capabilities: [gpu]
+mem_limit: 16g
+cpus: 10.0
+# 超时: 8小时5分钟（超时强制终止）
 ```
 
 ### 4.3 评分流程
 
 ```python
-# score_docker.py 逻辑
-1. 读取 test/output/result.csv
-2. 验证: stock_id/weight 列存在, ≤5只, 权重和∈[0,1]
-3. 读取 data/test.csv (真实未来5日数据)
-4. 计算: 收益率 = (第5日开盘价 - 第1日开盘价) / 第1日开盘价
-5. 计算: Final Score = Σ(权重 × 收益率)
-6. 输出: Team Name + Final Score
+# score_docker.py 逻辑（不可修改）
+1. 读取 test/output/result.csv          # 选手的预测
+2. 验证: stock_id/weight 列存在
+3. 验证: ≤5只股票
+4. 验证: 权重和 ∈ [0, 1]
+   → 任一验证失败 → Final Score = -999
+5. 读取 data/test.csv (真实未来5日数据)
+6. 计算: 收益率_i = (第5日开盘价 - 第1日开盘价) / 第1日开盘价
+7. 计算: Final Score = Σ_i (weight_i × 收益率_i)
+8. 输出: Team Name + Final Score
 ```
+
+### 4.4 提交清单
+
+| 提交物 | 说明 |
+|---|---|
+| `队伍名称.tar` | Docker 镜像导出文件，`docker save -o 队伍名称.tar bdc2026:latest` |
+| `result.csv` | 最终预测结果（Docker 运行后自动生成） |
+
+**提交方式**: 上传 .tar 到夸克网盘，生成永久有效分享链接（不加提取码），在 Heywhale 平台提交。
 
 ---
 
@@ -311,19 +405,41 @@ CPU: 10核
 
 ### 5.2 禁止事项
 
-- ❌ 修改 `output/result.csv` 的列名或结构
+- ❌ 修改 `output/result.csv` 的列名或结构（会导致 -999 分）
 - ❌ 在 Docker 内依赖网络请求（离线运行）
-- ❌ 训练时使用未来的测试数据
+- ❌ 训练时使用 `data/test.csv`（未来数据泄漏）
 - ❌ 修改评分脚本 `score_self.py` / `score_docker.py`
 - ❌ 硬编码路径（必须通过 config 读取）
+- ❌ 提交不含机器学习算法的方案（会被取消资格）
 
 ### 5.3 分支策略
 
 ```
-master          — 稳定版本
-feature/xxx     — 功能开发分支
-experiment/xxx  — 实验性改动
+master          — 稳定版本（可直接提交比赛）
+feature/xxx     — 功能开发分支（如 feature/industry-diversification）
+experiment/xxx  — 实验性改动（如 experiment/different-loss）
 ```
+
+### 5.4 超越基准程序的改进方向
+
+| 方向 | 改动文件 | 是否需要重训 | 预期收益 |
+|---|---|---|---|
+| **权重不等权分配** | predict.py | ❌ 不需要 | ⭐⭐⭐⭐ |
+| **行业分散约束** | predict.py | ❌ 不需要 | ⭐⭐⭐ |
+| **扩大候选池+二次筛选** | predict.py | ❌ 不需要 | ⭐⭐ |
+| **波动率风控** | predict.py | ❌ 不需要 | ⭐ |
+| **新增特征** | utils.py + train.py + predict.py | ✅ 需要 | ⭐⭐⭐ |
+| **模型架构改进** | model.py + train.py | ✅ 需要 | ⭐⭐⭐⭐ |
+| **损失函数优化** | train.py | ✅ 需要 | ⭐⭐⭐ |
+| **集成学习** | train.py + predict.py | ✅ 需要 | ⭐⭐⭐⭐ |
+| **超参数搜索** | config.py + train.py | ✅ 需要 | ⭐⭐ |
+
+### 5.5 可复现性要求
+
+比赛要求 Docker 重跑结果与提交结果一致。因此：
+- `train.py` 中使用了 `set_seed(42)` 固定随机种子
+- `config.json` 保存训练时配置快照
+- **修改代码后必须重新打包 Docker 镜像并验证**
 
 ---
 
@@ -335,3 +451,35 @@ experiment/xxx  — 实验性改动
 | 多进程报错 | 必须通过脚本入口运行（`spawn` 模式） |
 | 显存不足 (OOM) | 启用 `use_amp=True` + 降低 `batch_size` |
 | 预测结果格式不合法 | 检查 stock_id 是否为6位字符串、权重和是否在 [0,1] |
+| Docker 内训练超时 | 降低 `num_epochs` 或减小模型规模 |
+| 评分返回 -999 | 检查 result.csv 列名是否为 `stock_id` 和 `weight`（不能是中文） |
+| 成绩未超越基准 | 优先改进权重分配策略（无需重训） |
+
+---
+
+## 7. 附录
+
+### 7.1 关键文件清单
+
+| 文件 | 职责 | 可修改 |
+|---|---|---|
+| `code/src/config.py` | 全局配置 | ✅ |
+| `code/src/model.py` | 模型结构 | ✅ |
+| `code/src/train.py` | 训练流程 | ✅ |
+| `code/src/predict.py` | 推理预测 | ✅ |
+| `code/src/utils.py` | 特征工程 | ✅ |
+| `get_stock_data.py` | 数据下载 | ⚠️ 改日期参数 |
+| `data/split_train_test.py` | 数据划分 | ⚠️ 改日期参数 |
+| `Dockerfile` | Docker 打包 | ⚠️ 确认依赖 |
+| `docker-compose.yml` | Docker 编排 | ❌ 不建议改 |
+| `data/run.sh` | 容器执行入口 | ❌ 不建议改 |
+| `train.sh` / `test.sh` | 训练/推理脚本 | ❌ 不建议改 |
+| `test/score_self.py` | 本地自评 | ❌ 不可修改 |
+| `test/score_docker.py` | 赛事方评分 | ❌ 不可修改 |
+
+### 7.2 官方资源
+
+- **比赛平台**: https://www.heywhale.com/u/2026BDC
+- **大赛官网**: https://nercbds.tsinghua.edu.cn/bdc.html
+- **基准程序**: https://github.com/Sherlock1956/THU-BDC2026
+- **大赛邮箱**: data@tsinghua.edu.cn
