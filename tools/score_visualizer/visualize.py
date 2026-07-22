@@ -19,7 +19,7 @@ import numpy as np
 from datetime import datetime
 
 # 路径配置
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RESULT_PATH = os.path.join(PROJECT_ROOT, 'output', 'result.csv')
 TEST_DATA_PATH = os.path.join(PROJECT_ROOT, 'data', 'test.csv')
 HISTORY_PATH = os.path.join(PROJECT_ROOT, 'test', 'score_history.csv')

@@ -35,6 +35,9 @@ temp/
 *.tar
 *.zip
 
+# 可视化工具生成图表
+tools/score_visualizer/*.png
+
 # Jupyter
 .ipynb_checkpoints/
 
