@@ -4,3 +4,24 @@ __pycache__
 .venv
 .vscode
 .idea
+
+# 旧预测结果（Docker 运行时应重新生成，不能预置）
+output/result.csv
+test/output/result.csv
+temp/tmp.csv
+
+# 本地数据（赛事方会挂载 data/）
+data/stock_data.csv
+data/train.csv
+data/test.csv
+
+# 本地数据采集工具（不进入 Docker）
+get_stock_data.py
+data/split_train_test.py
+data/hs300_stock_list.csv
+
+# 可视化工具（本地桌面应用，非核心管道）
+tools/score_visualizer/
+
+# 可视化生成文件
+*.png
