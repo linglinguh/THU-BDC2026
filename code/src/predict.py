@@ -299,7 +299,12 @@ def multi_factor_ranking(ranked_ids, ranked_scores, factor_data, config):
 
 
 def main():
-	data_file = os.path.join(config['data_path'], 'train.csv')
+	# 赛事方仅挂载 data/stock_data.csv，不提供 train.csv。
+	# 优先读 stock_data.csv，本地开发时可仍用 split_train_test.py 生成的 train.csv
+	data_file = os.path.join(config['data_path'], 'stock_data.csv')
+	if not os.path.exists(data_file):
+		data_file = os.path.join(config['data_path'], 'train.csv')
+	print(f'读取数据文件: {data_file}')
 	model_path = os.path.join(config['output_dir'], 'best_model.pth')
 	scaler_path = os.path.join(config['output_dir'], 'scaler.pkl')
 	output_path = os.path.join('./output/', 'result.csv')

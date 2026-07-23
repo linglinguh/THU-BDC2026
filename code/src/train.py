@@ -593,7 +593,12 @@ def main():
         device = torch.device('cpu')
     
     # 1. 数据加载
-    data_file = os.path.join(data_path, 'train.csv')
+    # 赛事方仅挂载 data/stock_data.csv，不提供 train.csv。
+    # 优先读 stock_data.csv，本地开发时可仍用 split_train_test.py 生成的 train.csv
+    data_file = os.path.join(data_path, 'stock_data.csv')
+    if not os.path.exists(data_file):
+        data_file = os.path.join(data_path, 'train.csv')
+    print(f'读取数据文件: {data_file}')
     full_df = pd.read_csv(data_file)
     train_df, val_df, val_start = split_train_val_by_last_month(full_df, config['sequence_length'])
     
