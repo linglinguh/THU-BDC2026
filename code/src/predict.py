@@ -9,6 +9,7 @@ from tqdm import tqdm
 
 from config import config
 from model import StockTransformer
+from industry_map import get_industry
 from utils import engineer_features_39, engineer_features_158plus39
 
 
@@ -93,6 +94,42 @@ def build_inference_sequences(data, features, sequence_length, stock_ids, latest
 	return np.asarray(sequences, dtype=np.float32), sequence_stock_ids
 
 
+def diversify_by_industry(candidates, cand_scores, config):
+	"""行业分散选股：从候选池中取 Top5，同一行业不超过 max_per_sector 只"""
+	max_per = config.get('industry_max_per_sector', 2)
+	enable = config.get('enable_industry_diversify', False)
+
+	if not enable:
+		return [candidates[i] for i in range(min(5, len(candidates)))], np.array(cand_scores[:5])
+
+	selected, selected_scores = [], []
+	industry_count = {}
+
+	print(f'\n  行业分散选股 (每行业上限 {max_per} 只):')
+	for i, sid in enumerate(candidates):
+		ind = get_industry(sid)
+		cnt = industry_count.get(ind, 0)
+		if cnt < max_per:
+			selected.append(sid)
+			selected_scores.append(cand_scores[i])
+			industry_count[ind] = cnt + 1
+			print(f'    #{len(selected)} {sid} [{ind}] 得分={cand_scores[i]:+.4f}')
+		if len(selected) >= 5:
+			break
+
+	# 不足5只时从被跳过的候选补充
+	if len(selected) < 5:
+		for i, sid in enumerate(candidates):
+			if sid not in selected:
+				selected.append(sid)
+				selected_scores.append(cand_scores[i])
+				print(f'    #補 {sid} [{get_industry(sid)}] (候选池回退补充)')
+			if len(selected) >= 5:
+				break
+
+	return selected[:5], np.array(selected_scores[:5])
+
+
 def compute_stock_metrics(raw_df, stock_ids, latest_date, momentum_days, volatility_days):
 	"""计算候选股票的近期待征：动量（累计涨跌幅）和波动率（日均振幅）。
 
@@ -163,15 +200,18 @@ def filter_candidates(ranked_ids, ranked_scores, metrics, config):
 		idx = candidates.index(sid)
 		filtered.append((sid, cand_scores[idx]))
 
-	# 按模型分数降序取 Top5
+	# 按模型分数降序排列
 	filtered.sort(key=lambda x: -x[1])
-	top5 = [f[0] for f in filtered[:5]]
-	top5_scores = [f[1] for f in filtered[:5]]
+	sorted_ids = [f[0] for f in filtered]
+	sorted_scores = [f[1] for f in filtered]
+
+	# 行业分散 + 取 Top5
+	top5, top5_scores = diversify_by_industry(sorted_ids, sorted_scores, config)
 
 	# 打印筛选详情
 	for i, sid in enumerate(top5):
 		m = metrics[sid]
-		print(f'  Top{i+1}: {sid}  动量={m["momentum"]:+.2%}  波动={m["volatility"]:.2%}')
+		print(f'  Top{i+1}: {sid} [{get_industry(sid)}]  动量={m["momentum"]:+.2%}  波动={m["volatility"]:.2%}')
 
 	return top5, np.array(top5_scores)
 
@@ -281,10 +321,13 @@ def multi_factor_ranking(ranked_ids, ranked_scores, factor_data, config):
 		+ w_vr * z['volume_ratio']
 	)
 
-	# 按综合分降序取 Top5
+	# 按综合分降序排列
 	idx_order = np.argsort(composite)[::-1]
-	top5 = [candidates[i] for i in idx_order[:5]]
-	top5_scores = np.array([cand_scores[i] for i in idx_order[:5]])  # 仍用原始模型分做权重
+	sorted_ids = [candidates[i] for i in idx_order]
+	sorted_scores = [cand_scores[i] for i in idx_order]
+
+	# 行业分散选股（仅从候选池中调整 Top5，不改变排序基础）
+	top5, top5_scores = diversify_by_industry(sorted_ids, sorted_scores, config)
 
 	# 打印详情
 	print(f'\n  多因子融合评分 (候选池 {len(candidates)} 只)')

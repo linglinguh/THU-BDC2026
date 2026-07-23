@@ -47,4 +47,8 @@ config = {
     'enable_volatility_filter': True,
     'volatility_lookback_days': 10,
     'volatility_max_threshold': 0.15,
+
+    # 行业分散（避免 Top5 集中在同一行业，降低组合风险）
+    'enable_industry_diversify': True,
+    'industry_max_per_sector': 2,       # 同一行业最多入选 2 只
 }
