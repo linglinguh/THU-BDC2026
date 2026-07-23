@@ -14,6 +14,14 @@ config = {
     'feature_num': feature_num,
     'max_grad_norm': 5.0,
 
+    # --- MASTER 架构 (AAAI 2024) 三大核心创新 ---
+    # 启用后使用 Intra-Day Attention + Inter-Day Attention + Market-Guided Gating 交替层
+    # 关闭则回退到原始 StockTransformer 架构（向后兼容旧权重）
+    'enable_master': True,
+    # MASTER 交替层数：每层包含 日内注意力→日间注意力→市场门控
+    # 4GB 显卡建议 1 层；显存充裕可调到 2~3
+    'master_num_layers': 1,
+
     'pairwise_weight': 1, # 配对损失权重
     'base_weight': 1.0, # 非top-k样本权重
     'top5_weight': 2.0, # top-5样本权重（应大于base_weight）

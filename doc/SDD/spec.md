@@ -1,6 +1,6 @@
 # 股票排序预测系统 — 软件设计规格说明书 (SDD)
 
-> **版本**: 3.1 | **最后更新**: 2026-07-23 | **适用比赛**: 2026 中国高校计算机大赛—大数据挑战赛
+> **版本**: 3.2 | **最后更新**: 2026-07-23 | **适用比赛**: 2026 中国高校计算机大赛—大数据挑战赛
 > **基线仓库**: https://github.com/Sherlock1956/THU-BDC2026
 > **赛题内容**: https://www.heywhale.com/home/competition/69c0dfa34f302f8f0122e1bb
 
@@ -155,6 +155,8 @@ Final Score = Σ(weight_i × 收益率_i)
 | `dropout` | 0.1 | ✅ | Dropout 比率 |
 | `max_grad_norm` | 5.0 | ✅ | 梯度裁剪阈值 |
 | `use_amp` | True | ✅ | 启用混合精度 |
+| `enable_master` | True | ✅ | 启用 MASTER 架构 (AAAI 2024) |
+| `master_num_layers` | 1 | ✅ | MASTER 交替层数 (4GB显卡建议1层) |
 | `predict_temperature` | 1.0 | ✅ | 推理 softmax 温度 |
 | `enable_multi_factor` | True | ✅ | 多因子评分开关 |
 | `multi_factor_*_weight` | 见 config | ✅ | 因子权重 |
@@ -170,26 +172,52 @@ Final Score = Σ(weight_i × 收益率_i)
 
 ### 2.2 `code/src/model.py` — 模型定义
 
-**职责**: 定义 `StockTransformer` 模型。
+**职责**: 定义 `StockTransformer` 模型，支持两种架构（通过 `enable_master` 切换）。
 
 | 项目 | 规格 |
 |---|---|
 | **输入形状** | `[batch, num_stocks, seq_len, feature_dim]` |
+| **可选 mask** | `[batch, num_stocks]`，1=有效 0=padding（MASTER 日内注意力用） |
 | **输出形状** | `[batch, num_stocks]` |
-| **参数量** | 约 4M |
+| **参数量** | 约 4M~6M（取决于 `master_num_layers`） |
+
+#### 2.2.1 MASTER 架构 (`enable_master=True`，默认)
+
+移植自 AAAI 2024 论文 "MASTER: Market-Guided Stock Transformer" 三大核心创新：
+
+| 创新点 | 模块 | 作用 |
+|---|---|---|
+| **日内交互注意力** | `IntraDayAttention` | 每个时间步内跨股票 self-attention，捕捉同日截面关系（领涨/领跌效应） |
+| **日间时序注意力** | `MASTERLayer.inter_day_attn` | 每只股票的时间序列建模（TransformerEncoderLayer） |
+| **市场引导门控** | `MarketGuidedGate` | 用全市场截面均值生成门控信号，调制个股特征（市场上涨放大/下跌抑制） |
+
+**MASTER 架构子模块序列**:
+1. `input_proj` (Linear): `feature_dim → d_model`
+2. `PositionalEncoding`: 正弦位置编码
+3. `master_encoder` (ModuleList × `master_num_layers`): 每层依次执行:
+   - `IntraDayAttention`: `[B,N,L,D]` → 每个时间步内跨股票 attention
+   - `inter_day_attn` (TransformerEncoderLayer): `[B*N,L,D]` → 时序建模
+   - `MarketGuidedGate`: `[B,N,L,D]` → 市场门控调制
+4. `FeatureAttention`: 时间维特征加权聚合 `[B*N,L,D] → [B*N,D]`
+5. `ranking_layers` (Sequential): `d_model → d_model → d_model/2`
+6. `score_head` (Sequential): `d_model/2 → d_model/4 → 1`
+
+#### 2.2.2 原始架构 (`enable_master=False`，向后兼容)
 
 **子模块序列**:
 1. `input_proj` (Linear): `feature_dim → d_model`
 2. `PositionalEncoding`: 正弦位置编码
-3. `temporal_encoder` (TransformerEncoder): 提取单股票时序模式
+3. `temporal_encoder` (TransformerEncoder × `num_layers`): 单股票时序模式
 4. `FeatureAttention`: 时间维特征加权聚合
 5. `CrossStockAttention` (MultiheadAttention): 股票间交互
 6. `ranking_layers` (Sequential): `d_model → d_model → d_model/2`
 7. `score_head` (Sequential): `d_model/2 → d_model/4 → 1`
 
 **约束**:
-- 输入/输出形状不变
+- 输入/输出形状不变（`[batch, num_stocks, seq_len, feature_dim]` → `[batch, num_stocks]`）
 - `_init_weights()` 使用 Xavier 初始化
+- `enable_master` 切换架构时需重新训练（权重不兼容）
+- `forward(self, src, mask=None)` — mask 为可选参数，不传时自动忽略 padding 处理
 
 ---
 
@@ -398,7 +426,7 @@ cpus: 10.0
 
 ### 5.1 代码修改原则
 
-1. **修改模型结构** → 只能改 `model.py`，保持输入/输出形状不变
+1. **修改模型结构** → 只能改 `model.py`，保持输入/输出形状不变（`forward` 可新增可选参数如 `mask`，不影响旧调用）
 2. **修改训练逻辑** → 只能改 `train.py`，保持产物格式不变
 3. **修改推理逻辑** → 只能改 `predict.py`，保持 `output/result.csv` 格式不变
 4. **新增/修改特征** → 必须同步更新 `train.py` 和 `predict.py` 中的 `feature_cloums_map`
@@ -494,10 +522,13 @@ experiment/xxx  — 实验性改动
 
 ### 7.3 v2.1 → v3.x 关键变更
 
-| 项 | v2.1 | v3.0 | v3.1 |
-|---|---|---|---|
-| 数据来源假设 | 假设 data/train.csv 存在 | **改为读 stock_data.csv + fallback** | ✅ 保持 |
-| 目录挂载规则 | 未说明 | **新增 §3.6 挂载规则表** | ✅ 保持 |
-| 提交流程 | 网盘 | **先 result.csv 排名 → 再 docker 上传** | **补充入围比例和决赛晋级规则** |
-| 硬编码禁止 | 未提及 | **通知公告.md 明令禁止** | ✅ 保持 |
-| 代码审查 | 未提及 | 未提及 | **新增复现不一致处理规则** |
+| 项 | v2.1 | v3.0 | v3.1 | v3.2 |
+|---|---|---|---|---|
+| 数据来源假设 | 假设 data/train.csv 存在 | **改为读 stock_data.csv + fallback** | ✅ 保持 | ✅ 保持 |
+| 目录挂载规则 | 未说明 | **新增 §3.6 挂载规则表** | ✅ 保持 | ✅ 保持 |
+| 提交流程 | 网盘 | **先 result.csv 排名 → 再 docker 上传** | **补充入围比例和决赛晋级规则** | ✅ 保持 |
+| 硬编码禁止 | 未提及 | **通知公告.md 明令禁止** | ✅ 保持 | ✅ 保持 |
+| 代码审查 | 未提及 | 未提及 | **新增复现不一致处理规则** | ✅ 保持 |
+| 模型架构 | StockTransformer | StockTransformer | StockTransformer | **新增 MASTER 架构 (AAAI 2024)：日内注意力 + 日间注意力 + 市场引导门控** |
+| `forward` 签名 | `forward(src)` | `forward(src)` | `forward(src)` | `forward(src, mask=None)` — mask 可选，向后兼容 |
+| 新增配置项 | — | `use_amp` | 多因子/行业分散 | `enable_master`, `master_num_layers` |

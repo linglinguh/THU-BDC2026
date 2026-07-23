@@ -330,8 +330,8 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
         
         # --- 前向传播放在 autocast 中（AMP 模式则自动混合精度）---
         with amp_context:
-            # 模型预测
-            outputs = model(sequences)  # [batch, max_stocks] 预测分数
+            # 模型预测（传入 mask 供 MASTER 日内注意力排除 padding 股票）
+            outputs = model(sequences, mask=masks)  # [batch, max_stocks] 预测分数
             
             # 应用mask，只考虑有效股票
             masked_outputs = outputs * masks + (1 - masks) * (-1e9)  # 无效位置设为很小的值
@@ -423,7 +423,7 @@ def evaluate_ranking_model(model, dataloader, criterion, device, writer, epoch, 
             
             # 前向传播（AMP 模式下使用 autocast 加速推理）
             with amp_context:
-                outputs = model(sequences)
+                outputs = model(sequences, mask=masks)
             
             # 应用mask
             masked_outputs = outputs * masks + (1 - masks) * (-1e9)
