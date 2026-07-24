@@ -10,16 +10,15 @@ from tensorboardX import SummaryWriter
 from config import config
 from model import StockTransformer
 from utils import engineer_features_39, engineer_features_158plus39
-from utils import create_ranking_dataset_vectorized
 import joblib
 import os
 import json
 import multiprocessing as mp
 import random
 import contextlib
+from strategy import select_portfolio
 
 # 混合精度训练 (AMP)
-from torch.cuda.amp import autocast, GradScaler
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
@@ -31,29 +30,73 @@ def set_seed(seed=42):
     os.environ['PYTHONHASHSEED'] = str(seed)
 
 feature_cloums_map = {
-    '39': ['instrument','开盘', '收盘', '最高', '最低', '成交量', '成交额', '振幅', '涨跌额', '换手率', '涨跌幅','sma_5', 'sma_20', 'ema_12', 'ema_26', 'rsi', 'macd', 'macd_signal', 'volume_change', 'obv','volume_ma_5', 'volume_ma_20', 'volume_ratio', 'kdj_k', 'kdj_d', 'kdj_j', 'boll_mid', 'boll_std', 'atr_14', 'ema_60', 'volatility_10', 'volatility_20', 'return_1', 'return_5', 'return_10',  'high_low_spread', 'open_close_spread', 'high_close_spread', 'low_close_spread'],
+    '39': ['开盘', '收盘', '最高', '最低', '成交量', '成交额', '振幅', '涨跌额', '换手率', '涨跌幅','sma_5', 'sma_20', 'ema_12', 'ema_26', 'rsi', 'macd', 'macd_signal', 'volume_change', 'obv','volume_ma_5', 'volume_ma_20', 'volume_ratio', 'kdj_k', 'kdj_d', 'kdj_j', 'boll_mid', 'boll_std', 'atr_14', 'ema_60', 'volatility_10', 'volatility_20', 'return_1', 'return_5', 'return_10',  'high_low_spread', 'open_close_spread', 'high_close_spread', 'low_close_spread'],
 
-    '158+39': ['instrument','开盘', '收盘', '最高', '最低', '成交量', '成交额', '振幅', '涨跌额', '换手率', '涨跌幅','KMID', 'KLEN', 'KMID2', 'KUP', 'KUP2', 'KLOW', 'KLOW2', 'KSFT', 'KSFT2', 'OPEN0', 'HIGH0', 'LOW0', 'VWAP0', 'ROC5', 'ROC10', 'ROC20', 'ROC30', 'ROC60', 'MA5', 'MA10', 'MA20', 'MA30', 'MA60', 'STD5', 'STD10', 'STD20', 'STD30', 'STD60', 'BETA5', 'BETA10', 'BETA20', 'BETA30', 'BETA60', 'RSQR5', 'RSQR10', 'RSQR20', 'RSQR30', 'RSQR60', 'RESI5', 'RESI10', 'RESI20', 'RESI30', 'RESI60', 'MAX5', 'MAX10', 'MAX20', 'MAX30', 'MAX60', 'MIN5', 'MIN10', 'MIN20', 'MIN30', 'MIN60', 'QTLU5', 'QTLU10', 'QTLU20', 'QTLU30', 'QTLU60', 'QTLD5', 'QTLD10', 'QTLD20', 'QTLD30', 'QTLD60', 'RANK5', 'RANK10', 'RANK20', 'RANK30', 'RANK60', 'RSV5', 'RSV10', 'RSV20', 'RSV30', 'RSV60', 'IMAX5', 'IMAX10', 'IMAX20', 'IMAX30', 'IMAX60', 'IMIN5', 'IMIN10', 'IMIN20', 'IMIN30', 'IMIN60', 'IMXD5', 'IMXD10', 'IMXD20', 'IMXD30', 'IMXD60', 'CORR5', 'CORR10', 'CORR20', 'CORR30', 'CORR60', 'CORD5', 'CORD10', 'CORD20', 'CORD30', 'CORD60', 'CNTP5', 'CNTP10', 'CNTP20', 'CNTP30', 'CNTP60', 'CNTN5', 'CNTN10', 'CNTN20', 'CNTN30', 'CNTN60', 'CNTD5', 'CNTD10', 'CNTD20', 'CNTD30', 'CNTD60', 'SUMP5', 'SUMP10', 'SUMP20', 'SUMP30', 'SUMP60', 'SUMN5', 'SUMN10', 'SUMN20', 'SUMN30', 'SUMN60', 'SUMD5', 'SUMD10', 'SUMD20', 'SUMD30', 'SUMD60', 'VMA5', 'VMA10', 'VMA20', 'VMA30', 'VMA60', 'VSTD5', 'VSTD10', 'VSTD20', 'VSTD30', 'VSTD60', 'WVMA5', 'WVMA10', 'WVMA20', 'WVMA30', 'WVMA60', 'VSUMP5', 'VSUMP10', 'VSUMP20', 'VSUMP30', 'VSUMP60', 'VSUMN5', 'VSUMN10', 'VSUMN20', 'VSUMN30', 'VSUMN60', 'VSUMD5', 'VSUMD10', 'VSUMD20', 'VSUMD30', 'VSUMD60','sma_5', 'sma_20', 'ema_12', 'ema_26', 'rsi', 'macd', 'macd_signal', 'volume_change', 'obv', 'volume_ma_5', 'volume_ma_20', 'volume_ratio', 'kdj_k', 'kdj_d', 'kdj_j', 'boll_mid', 'boll_std', 'atr_14', 'ema_60', 'volatility_10', 'volatility_20', 'return_1', 'return_5', 'return_10',  'high_low_spread', 'open_close_spread', 'high_close_spread', 'low_close_spread']
+    '158+39': ['开盘', '收盘', '最高', '最低', '成交量', '成交额', '振幅', '涨跌额', '换手率', '涨跌幅','KMID', 'KLEN', 'KMID2', 'KUP', 'KUP2', 'KLOW', 'KLOW2', 'KSFT', 'KSFT2', 'OPEN0', 'HIGH0', 'LOW0', 'VWAP0', 'ROC5', 'ROC10', 'ROC20', 'ROC30', 'ROC60', 'MA5', 'MA10', 'MA20', 'MA30', 'MA60', 'STD5', 'STD10', 'STD20', 'STD30', 'STD60', 'BETA5', 'BETA10', 'BETA20', 'BETA30', 'BETA60', 'RSQR5', 'RSQR10', 'RSQR20', 'RSQR30', 'RSQR60', 'RESI5', 'RESI10', 'RESI20', 'RESI30', 'RESI60', 'MAX5', 'MAX10', 'MAX20', 'MAX30', 'MAX60', 'MIN5', 'MIN10', 'MIN20', 'MIN30', 'MIN60', 'QTLU5', 'QTLU10', 'QTLU20', 'QTLU30', 'QTLU60', 'QTLD5', 'QTLD10', 'QTLD20', 'QTLD30', 'QTLD60', 'RANK5', 'RANK10', 'RANK20', 'RANK30', 'RANK60', 'RSV5', 'RSV10', 'RSV20', 'RSV30', 'RSV60', 'IMAX5', 'IMAX10', 'IMAX20', 'IMAX30', 'IMAX60', 'IMIN5', 'IMIN10', 'IMIN20', 'IMIN30', 'IMIN60', 'IMXD5', 'IMXD10', 'IMXD20', 'IMXD30', 'IMXD60', 'CORR5', 'CORR10', 'CORR20', 'CORR30', 'CORR60', 'CORD5', 'CORD10', 'CORD20', 'CORD30', 'CORD60', 'CNTP5', 'CNTP10', 'CNTP20', 'CNTP30', 'CNTP60', 'CNTN5', 'CNTN10', 'CNTN20', 'CNTN30', 'CNTN60', 'CNTD5', 'CNTD10', 'CNTD20', 'CNTD30', 'CNTD60', 'SUMP5', 'SUMP10', 'SUMP20', 'SUMP30', 'SUMP60', 'SUMN5', 'SUMN10', 'SUMN20', 'SUMN30', 'SUMN60', 'SUMD5', 'SUMD10', 'SUMD20', 'SUMD30', 'SUMD60', 'VMA5', 'VMA10', 'VMA20', 'VMA30', 'VMA60', 'VSTD5', 'VSTD10', 'VSTD20', 'VSTD30', 'VSTD60', 'WVMA5', 'WVMA10', 'WVMA20', 'WVMA30', 'WVMA60', 'VSUMP5', 'VSUMP10', 'VSUMP20', 'VSUMP30', 'VSUMP60', 'VSUMN5', 'VSUMN10', 'VSUMN20', 'VSUMN30', 'VSUMN60', 'VSUMD5', 'VSUMD10', 'VSUMD20', 'VSUMD30', 'VSUMD60','sma_5', 'sma_20', 'ema_12', 'ema_26', 'rsi', 'macd', 'macd_signal', 'volume_change', 'obv', 'volume_ma_5', 'volume_ma_20', 'volume_ratio', 'kdj_k', 'kdj_d', 'kdj_j', 'boll_mid', 'boll_std', 'atr_14', 'ema_60', 'volatility_10', 'volatility_20', 'return_1', 'return_5', 'return_10',  'high_low_spread', 'open_close_spread', 'high_close_spread', 'low_close_spread']
 }
 feature_engineer_func_map = {
     '39': engineer_features_39,
     '158+39': engineer_features_158plus39
 }
 
+STRATEGY_CONFIG_KEYS = (
+    'predict_temperature',
+    'candidate_pool_size',
+    'enable_multi_factor',
+    'multi_factor_model_weight',
+    'multi_factor_momentum_weight',
+    'multi_factor_reversal_weight',
+    'multi_factor_volatility_weight',
+    'multi_factor_liquidity_weight',
+    'multi_factor_volume_weight',
+    'enable_industry_diversify',
+    'industry_max_per_sector',
+)
+
+
+def changed_strategy_config(checkpoint_config, current_config):
+    """Return strategy keys that make a saved validation score incomparable."""
+    checkpoint_config = checkpoint_config or {}
+    return {
+        key: (checkpoint_config.get(key), current_config.get(key))
+        for key in STRATEGY_CONFIG_KEYS
+        if checkpoint_config.get(key) != current_config.get(key)
+    }
+
 
 def _build_label_and_clean(processed, drop_small_open=True):
-    """统一构建标签并清洗无效样本。"""
+    """Build T+1-to-T+5 labels on the shared exchange trading calendar.
+
+    Rows without a valid label are retained because they can still be used as
+    causal history by a later prediction window.
+    """
+    processed = processed.sort_values(['股票代码', '日期']).copy()
+    processed['_date'] = pd.to_datetime(processed['日期'])
+    calendar = pd.Index(sorted(processed['_date'].unique()))
+    date_to_position = pd.Series(np.arange(len(calendar)), index=calendar)
+    processed['_date_position'] = processed['_date'].map(date_to_position).astype(np.int64)
+
     processed['open_t1'] = processed.groupby('股票代码')['开盘'].shift(-1)
     processed['open_t5'] = processed.groupby('股票代码')['开盘'].shift(-5)
+    processed['_position_t1'] = processed.groupby('股票代码')['_date_position'].shift(-1)
+    processed['_position_t5'] = processed.groupby('股票代码')['_date_position'].shift(-5)
+
+    valid_label = (
+        (processed['_position_t1'] == processed['_date_position'] + 1)
+        & (processed['_position_t5'] == processed['_date_position'] + 5)
+    )
 
     # 过滤无效开盘价，避免收益率极端爆炸
     if drop_small_open:
-        processed = processed[processed['open_t1'] > 1e-4]
+        valid_label &= processed['open_t1'] > 1e-4
 
     processed['label'] = (processed['open_t5'] - processed['open_t1']) / (processed['open_t1'] + 1e-12)
-    processed = processed.dropna(subset=['label'])
+    processed.loc[~valid_label, 'label'] = np.nan
 
-    processed.drop(columns=['open_t1', 'open_t5'], inplace=True)
+    processed.drop(
+        columns=['open_t1', 'open_t5', '_date', '_date_position', '_position_t1', '_position_t5'],
+        inplace=True,
+    )
     return processed
 
 
@@ -236,23 +279,127 @@ def calculate_ranking_metrics(y_pred, y_true, masks, k=5):
     
     return metrics
 
-class RankingDataset(torch.utils.data.Dataset):
-    """排序数据集类"""
-    def __init__(self, sequences, targets, relevance_scores, stock_indices):
-        self.sequences = sequences
-        self.targets = targets
-        self.relevance_scores = relevance_scores
-        self.stock_indices = stock_indices
-    
+
+def calculate_submission_return(
+    y_pred,
+    y_true,
+    masks,
+    stock_indices,
+    dates,
+    raw_df,
+    idx2stock,
+):
+    """Evaluate the exact selection, diversification and weighting used in predict.py."""
+    returns = []
+    for batch_index, date in enumerate(dates):
+        valid = masks[batch_index].bool()
+        scores = y_pred[batch_index][valid].detach().cpu().numpy()
+        targets = y_true[batch_index][valid].detach().cpu().numpy()
+        indices = stock_indices[batch_index][valid].detach().cpu().numpy()
+        stock_ids = [idx2stock[int(index)] for index in indices]
+        order = np.argsort(scores, kind='stable')[::-1]
+        ranked_ids = [stock_ids[index] for index in order]
+        ranked_scores = scores[order]
+        try:
+            selected_ids, weights = select_portfolio(
+                raw_df,
+                ranked_ids,
+                ranked_scores,
+                pd.Timestamp(date),
+                config,
+                verbose=False,
+            )
+        except ValueError:
+            continue
+        target_by_stock = dict(zip(stock_ids, targets))
+        returns.append(
+            float(sum(weight * target_by_stock[stock_id] for stock_id, weight in zip(selected_ids, weights)))
+        )
+    return float(np.mean(returns)) if returns else -float('inf')
+
+class AlignedRankingDataset(torch.utils.data.Dataset):
+    """Compact ranking dataset aligned to one shared exchange calendar.
+
+    Features are stored once in an [stock, date, feature] cube. Individual
+    60-day windows are sliced on demand, avoiding several GB of duplicated
+    arrays while guaranteeing that the same time position means the same date
+    for every stock passed to cross-stock attention.
+    """
+
+    def __init__(self, data, features, sequence_length, min_window_end_date=None):
+        frame = data.copy()
+        frame['日期'] = pd.to_datetime(frame['日期'])
+        duplicate_mask = frame.duplicated(['instrument', '日期'], keep=False)
+        if duplicate_mask.any():
+            raise ValueError(f'存在 {int(duplicate_mask.sum())} 行重复的 股票-日期 数据')
+
+        self.sequence_length = int(sequence_length)
+        self.stock_values = np.asarray(sorted(frame['instrument'].unique()), dtype=np.int64)
+        self.calendar = np.asarray(sorted(frame['日期'].unique()), dtype='datetime64[ns]')
+        stock_to_row = {stock: row for row, stock in enumerate(self.stock_values)}
+
+        shape = (len(self.stock_values), len(self.calendar))
+        self.feature_cube = np.full((*shape, len(features)), np.nan, dtype=np.float32)
+        self.label_cube = np.full(shape, np.nan, dtype=np.float32)
+        available = np.zeros(shape, dtype=np.bool_)
+
+        stock_rows = frame['instrument'].map(stock_to_row).to_numpy(dtype=np.int64)
+        date_cols = pd.Index(self.calendar).get_indexer(frame['日期'])
+        if (date_cols < 0).any():
+            raise ValueError('内部错误：部分日期无法映射到共享交易日历')
+        self.feature_cube[stock_rows, date_cols] = frame[features].to_numpy(dtype=np.float32)
+        self.label_cube[stock_rows, date_cols] = frame['label'].to_numpy(dtype=np.float32)
+        available[stock_rows, date_cols] = True
+
+        finite_features = np.isfinite(self.feature_cube).all(axis=2)
+        available &= finite_features
+        cumulative = np.pad(available.astype(np.int32).cumsum(axis=1), ((0, 0), (1, 0)))
+        minimum_date = pd.to_datetime(min_window_end_date) if min_window_end_date is not None else None
+        self.samples = []
+        for end_col in range(self.sequence_length - 1, len(self.calendar)):
+            end_date = pd.Timestamp(self.calendar[end_col])
+            if minimum_date is not None and end_date < minimum_date:
+                continue
+            start_col = end_col - self.sequence_length + 1
+            complete_window = (
+                cumulative[:, end_col + 1] - cumulative[:, start_col] == self.sequence_length
+            )
+            valid_stocks = np.flatnonzero(
+                complete_window & np.isfinite(self.label_cube[:, end_col])
+            )
+            if len(valid_stocks) >= 10:
+                self.samples.append((end_col, valid_stocks))
+
+        memory_mb = (self.feature_cube.nbytes + self.label_cube.nbytes) / 1024 ** 2
+        print(
+            f'对齐数据集: {len(self.samples)} 个日期样本, '
+            f'{len(self.stock_values)} 只股票, 紧凑存储 {memory_mb:.1f} MB'
+        )
+
     def __len__(self):
-        return len(self.sequences)
-    
+        return len(self.samples)
+
+    def limit_for_smoke_test(self, max_samples=0, max_stocks=0):
+        """Limit real-data work only when explicitly requested by test env vars."""
+        samples = self.samples[-max_samples:] if max_samples > 0 else self.samples
+        if max_stocks > 0:
+            samples = [(end_col, stock_rows[:max_stocks]) for end_col, stock_rows in samples]
+        self.samples = samples
+
     def __getitem__(self, idx):
+        end_col, stock_rows = self.samples[idx]
+        start_col = end_col - self.sequence_length + 1
+        sequences = self.feature_cube[stock_rows, start_col:end_col + 1]
+        targets = self.label_cube[stock_rows, end_col]
+        order = np.argsort(targets, kind='stable')[::-1]
+        relevance = np.empty(len(targets), dtype=np.int64)
+        relevance[order] = np.arange(len(targets), 0, -1, dtype=np.int64)
         return {
-            'sequences': torch.FloatTensor(self.sequences[idx]),  # [num_stocks, seq_len, features]
-            'targets': torch.FloatTensor(self.targets[idx]),      # [num_stocks] 真实涨跌幅
-            'relevance': torch.LongTensor(self.relevance_scores[idx]),  # [num_stocks] 排序标签
-            'stock_indices': torch.LongTensor(self.stock_indices[idx])  # [num_stocks] 股票索引
+            'sequences': torch.from_numpy(sequences.copy()),
+            'targets': torch.from_numpy(targets.copy()),
+            'relevance': torch.from_numpy(relevance),
+            'stock_indices': torch.from_numpy(self.stock_values[stock_rows].copy()),
+            'date': pd.Timestamp(self.calendar[end_col]),
         }
 
 def collate_fn(batch):
@@ -261,6 +408,7 @@ def collate_fn(batch):
     targets = [item['targets'] for item in batch]
     relevance = [item['relevance'] for item in batch]
     stock_indices = [item['stock_indices'] for item in batch]
+    dates = [item['date'] for item in batch]
     
     # 找到最大股票数量
     max_stocks = max(seq.size(0) for seq in sequences)
@@ -305,7 +453,8 @@ def collate_fn(batch):
         'targets': torch.stack(padded_targets),          # [batch, max_stocks]
         'relevance': torch.stack(padded_relevance),      # [batch, max_stocks]
         'stock_indices': torch.stack(padded_stock_indices),  # [batch, max_stocks]
-        'masks': torch.stack(masks)                      # [batch, max_stocks]
+        'masks': torch.stack(masks),                     # [batch, max_stocks]
+        'dates': dates,
     }
 
 # 排序训练函数
@@ -317,9 +466,6 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
     local_step = 0
     use_amp = scaler is not None
     
-    # 根据是否启用 AMP 选择 autocast 上下文
-    amp_context = autocast() if use_amp else contextlib.nullcontext()
-    
     for batch in tqdm(dataloader, desc=f"Training Epoch {epoch+1}"):
         sequences = batch['sequences'].to(device)    # [batch, max_stocks, seq_len, features]
         targets = batch['targets'].to(device)        # [batch, max_stocks] 真实涨跌幅
@@ -329,6 +475,7 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
         optimizer.zero_grad()
         
         # --- 前向传播放在 autocast 中（AMP 模式则自动混合精度）---
+        amp_context = torch.amp.autocast('cuda') if use_amp else contextlib.nullcontext()
         with amp_context:
             # 模型预测（传入 mask 供 MASTER 日内注意力排除 padding 股票）
             outputs = model(sequences, mask=masks)  # [batch, max_stocks] 预测分数
@@ -408,20 +555,32 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
     
     return total_loss / len(dataloader) if len(dataloader) > 0 else 0, total_metrics
 
-def evaluate_ranking_model(model, dataloader, criterion, device, writer, epoch, use_amp=False):
+def evaluate_ranking_model(
+    model,
+    dataloader,
+    criterion,
+    device,
+    writer,
+    epoch,
+    use_amp=False,
+    raw_df=None,
+    idx2stock=None,
+):
     model.eval()
     total_loss = 0
     total_metrics = {}
     num_batches = 0
-    amp_context = autocast() if use_amp else contextlib.nullcontext()
-    
+    submission_return_sum = 0.0
+    submission_return_days = 0
     with torch.no_grad():
         for batch in tqdm(dataloader, desc=f"Evaluating Epoch {epoch+1}"):
             sequences = batch['sequences'].to(device)
             targets = batch['targets'].to(device)
             masks = batch['masks'].to(device)
+            stock_indices = batch['stock_indices'].to(device)
             
             # 前向传播（AMP 模式下使用 autocast 加速推理）
+            amp_context = torch.amp.autocast('cuda') if use_amp else contextlib.nullcontext()
             with amp_context:
                 outputs = model(sequences, mask=masks)
             
@@ -461,6 +620,20 @@ def evaluate_ranking_model(model, dataloader, criterion, device, writer, epoch, 
             
             # 计算评估指标
             metrics = calculate_ranking_metrics(masked_outputs, masked_targets, masks, k=5)
+            if raw_df is not None and idx2stock is not None:
+                for sample_index, date in enumerate(batch['dates']):
+                    daily_return = calculate_submission_return(
+                        masked_outputs[sample_index:sample_index + 1],
+                        masked_targets[sample_index:sample_index + 1],
+                        masks[sample_index:sample_index + 1],
+                        stock_indices[sample_index:sample_index + 1],
+                        [date],
+                        raw_df,
+                        idx2stock,
+                    )
+                    if np.isfinite(daily_return):
+                        submission_return_sum += daily_return
+                        submission_return_days += 1
             for k, v in metrics.items():
                 if k not in total_metrics:
                     total_metrics[k] = 0
@@ -472,6 +645,12 @@ def evaluate_ranking_model(model, dataloader, criterion, device, writer, epoch, 
     avg_loss = total_loss / num_batches if num_batches > 0 else 0
     for k in total_metrics:
         total_metrics[k] /= num_batches
+    if raw_df is not None and idx2stock is not None:
+        total_metrics['submission_return'] = (
+            submission_return_sum / submission_return_days
+            if submission_return_days > 0
+            else -float('inf')
+        )
     
     if writer:
         writer.add_scalar('eval/loss', avg_loss, global_step=epoch)
@@ -547,25 +726,29 @@ def save_predictions(top_stocks, output_path):
     print(f"预测结果已保存到: {output_path}")
 
 
-def split_train_val_by_last_month(df, sequence_length):
-    """按最后一个月做验证集划分，并为验证集补充序列上下文。"""
+def split_train_val_by_last_month(df, sequence_length, validation_months=2):
+    """按最后若干月做验证集划分，并为验证集补充序列上下文。"""
     df = df.copy()
     df['日期'] = pd.to_datetime(df['日期'])
     df = df.sort_values(['日期', '股票代码']).reset_index(drop=True)
 
     last_date = df['日期'].max()
-    val_start = (last_date - pd.DateOffset(months=2)).normalize()
+    val_start = (last_date - pd.DateOffset(months=validation_months)).normalize()
 
-    # 验证集需要保留前 sequence_length-1 个交易日作为序列上下文，
-    # 这样第一个验证样本的窗口结束日就可以落在 val_start。
-    val_context_start = val_start - pd.tseries.offsets.BDay(sequence_length - 1)
+    # Each model row may contain a 60-day rolling feature and the model itself
+    # consumes 60 rows. Keep both lookbacks using actual exchange dates rather
+    # than generic weekdays (which do not know Chinese market holidays).
+    trading_dates = pd.Index(sorted(df['日期'].unique()))
+    val_position = int(trading_dates.searchsorted(val_start, side='left'))
+    context_position = max(0, val_position - (2 * sequence_length - 2))
+    val_context_start = pd.Timestamp(trading_dates[context_position])
 
     train_df = df[df['日期'] < val_start].copy()
     val_df = df[df['日期'] >= val_context_start].copy()
 
     print(f"全量数据范围: {df['日期'].min().date()} 到 {last_date.date()}")
     print(f"训练集范围: {train_df['日期'].min().date()} 到 {train_df['日期'].max().date()}")
-    print(f"验证集目标范围(最后一个月): {val_start.date()} 到 {last_date.date()}")
+    print(f"验证集目标范围(最后{validation_months}个月): {val_start.date()} 到 {last_date.date()}")
     print(f"验证集实际取数范围(含序列上下文): {val_df['日期'].min().date()} 到 {val_df['日期'].max().date()}")
 
     # 恢复为字符串，保持与原流程一致
@@ -599,12 +782,25 @@ def main():
     if not os.path.exists(data_file):
         data_file = os.path.join(data_path, 'train.csv')
     print(f'读取数据文件: {data_file}')
-    full_df = pd.read_csv(data_file)
-    train_df, val_df, val_start = split_train_val_by_last_month(full_df, config['sequence_length'])
+    full_df = pd.read_csv(data_file, dtype={'股票代码': str})
+    full_df['股票代码'] = full_df['股票代码'].astype(str).str.zfill(6)
+    full_df['日期'] = pd.to_datetime(full_df['日期'])
+    if config.get('as_of_date'):
+        as_of_date = pd.Timestamp(config['as_of_date'])
+        full_df = full_df[full_df['日期'] <= as_of_date].copy()
+        if full_df.empty:
+            raise ValueError(f'as_of_date={as_of_date.date()} 之前没有数据')
+        print(f'[WALK-FORWARD] 历史截面截止: {as_of_date.date()}')
+    train_df, val_df, val_start = split_train_val_by_last_month(
+        full_df,
+        config['sequence_length'],
+        validation_months=config.get('validation_months', 2),
+    )
     
     # 获取所有股票ID，建立映射
     all_stock_ids = full_df['股票代码'].unique()
     stockid2idx = {sid: idx for idx, sid in enumerate(sorted(all_stock_ids))}
+    idx2stock = {idx: sid for sid, idx in stockid2idx.items()}
     num_stocks = len(stockid2idx)
     
     # 2. 特征工程与预处理
@@ -625,27 +821,35 @@ def main():
     joblib.dump(scaler, os.path.join(output_dir, 'scaler.pkl'))
 
     
-    # 4. 创建排序数据集
-    train_sequences, train_targets, train_relevance, train_stock_indices = create_ranking_dataset_vectorized(
+    # 4. 创建按共享交易日历对齐的紧凑排序数据集
+    train_dataset = AlignedRankingDataset(
         train_data,
         features,
         config['sequence_length'],
-        ranking_data_path=config.get('train_ranking_data_path')
     )
-    val_sequences, val_targets, val_relevance, val_stock_indices = create_ranking_dataset_vectorized(
+    val_dataset = AlignedRankingDataset(
         val_data,
         features,
         config['sequence_length'],
-        ranking_data_path=config.get('val_ranking_data_path'),
         min_window_end_date=val_start.strftime('%Y-%m-%d')
     )
 
-    print(f"训练集样本数: {len(train_sequences)}")
-    print(f"验证集样本数: {len(val_sequences)}")
-    
-    # 5. 创建排序数据集和数据加载器
-    train_dataset = RankingDataset(train_sequences, train_targets, train_relevance, train_stock_indices)
-    val_dataset = RankingDataset(val_sequences, val_targets, val_relevance, val_stock_indices)
+    smoke_samples = int(os.getenv('BDC_SMOKE_MAX_SAMPLES', '0'))
+    smoke_stocks = int(os.getenv('BDC_SMOKE_MAX_STOCKS', '0'))
+    if smoke_samples > 0 or smoke_stocks > 0:
+        train_dataset.limit_for_smoke_test(smoke_samples, smoke_stocks)
+        val_dataset.limit_for_smoke_test(smoke_samples, smoke_stocks)
+        print(
+            f'[SMOKE] 限制真实数据样本: dates={smoke_samples or "all"}, '
+            f'stocks={smoke_stocks or "all"}'
+        )
+
+    print(f"训练集样本数: {len(train_dataset)}")
+    print(f"验证集样本数: {len(val_dataset)}")
+    if len(train_dataset) == 0 or len(val_dataset) == 0:
+        raise ValueError('训练集或验证集没有可用的对齐日期样本')
+
+    # 5. 创建排序数据加载器
     
     train_loader = DataLoader(
         train_dataset, 
@@ -683,7 +887,7 @@ def main():
     
     # 混合精度训练：仅 CUDA 设备 + 配置开启时生效
     use_amp = config.get('use_amp', False) and (device.type == 'cuda')
-    scaler = GradScaler('cuda') if use_amp else None
+    scaler = torch.amp.GradScaler('cuda') if use_amp else None
     if use_amp:
         print("[AMP] 混合精度训练已启用，显存占用约减半")
     else:
@@ -693,8 +897,70 @@ def main():
     if is_train:
         best_score = -float('inf')
         best_epoch = -1
+        start_epoch = 0
+        epochs_without_improvement = 0
+        last_completed_epoch = 0
+        stopped_early = False
+        checkpoint_path = os.path.join(output_dir, 'training_checkpoint.pth')
+
+        resume_checkpoint = os.getenv('BDC_RESUME_CHECKPOINT')
+        resume_from_best = os.getenv('BDC_RESUME_FROM_BEST', '0') == '1'
+        if resume_checkpoint:
+            if not os.path.exists(resume_checkpoint):
+                raise FileNotFoundError(f'续训检查点不存在: {resume_checkpoint}')
+            checkpoint = torch.load(resume_checkpoint, map_location=device, weights_only=False)
+            strategy_changes = changed_strategy_config(checkpoint.get('config'), config)
+            if strategy_changes:
+                details = ', '.join(
+                    f'{key}: {old!r} -> {new!r}'
+                    for key, (old, new) in strategy_changes.items()
+                )
+                raise ValueError(
+                    '续训检查点的组合策略与当前配置不同，最佳验证分数不可直接比较。'
+                    f'请使用新的 BDC_OUTPUT_DIR 或以 --force 重新滚动训练。变更: {details}'
+                )
+            model.load_state_dict(checkpoint['model'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            scheduler.load_state_dict(checkpoint['scheduler'])
+            if scaler is not None and checkpoint.get('amp_scaler') is not None:
+                scaler.load_state_dict(checkpoint['amp_scaler'])
+            start_epoch = int(checkpoint['completed_epochs'])
+            best_score = float(checkpoint['best_score'])
+            best_epoch = int(checkpoint['best_epoch'])
+            epochs_without_improvement = int(checkpoint.get('epochs_without_improvement', 0))
+            last_completed_epoch = start_epoch
+            print(
+                f'[RESUME] 从完整检查点继续: 已完成 {start_epoch}/{config["num_epochs"]} epoch, '
+                f'最佳 submission return={best_score:.4f}'
+            )
+        elif resume_from_best:
+            best_model_path = os.path.join(output_dir, 'best_model.pth')
+            if not os.path.exists(best_model_path):
+                raise FileNotFoundError(f'最佳模型不存在: {best_model_path}')
+            model.load_state_dict(torch.load(best_model_path, map_location=device, weights_only=True))
+            start_epoch = int(os.getenv('BDC_RESUME_EPOCH', '0'))
+            best_epoch = int(os.getenv('BDC_RESUME_BEST_EPOCH', str(start_epoch)))
+            best_score = float(os.getenv('BDC_RESUME_BEST_SCORE', '-inf'))
+            print(
+                f'[RESUME] 仅从模型权重继续: 已完成 {start_epoch}/{config["num_epochs"]} epoch, '
+                '优化器状态将重新初始化'
+            )
+
+        patience = config.get('early_stopping_patience', 0)
+        already_stopped_early = patience > 0 and epochs_without_improvement >= patience
+        if start_epoch >= config['num_epochs']:
+            print(
+                f'[RESUME] 检查点已完成目标 {start_epoch}/{config["num_epochs"]} epoch，'
+                '直接补写训练摘要'
+            )
+        elif already_stopped_early:
+            stopped_early = True
+            print(
+                f'[RESUME] 检查点已满足早停条件（连续 {epochs_without_improvement} 个 epoch '
+                '未提升），直接补写训练摘要'
+            )
         
-        for epoch in range(config['num_epochs']):
+        for epoch in range(start_epoch, config['num_epochs']):
             print(f"\n=== Epoch {epoch+1}/{config['num_epochs']} ===")
             
             # 训练
@@ -708,7 +974,15 @@ def main():
             
             # 验证
             eval_loss, eval_metrics = evaluate_ranking_model(
-                model, val_loader, criterion, device, writer, epoch, use_amp=use_amp
+                model,
+                val_loader,
+                criterion,
+                device,
+                writer,
+                epoch,
+                use_amp=use_amp,
+                raw_df=full_df,
+                idx2stock=idx2stock,
             )
             
             print(f"Eval Loss: {eval_loss:.4f}")
@@ -721,16 +995,60 @@ def main():
                 writer.add_scalar('train/learning_rate', scheduler.get_last_lr()[0], global_step=epoch)
             
 
-            # 保存最佳模型（基于final score）
-            current_final_score = eval_metrics.get('final_score', 0.0)
-            if current_final_score > best_score:
-                best_score = current_final_score
+            # 保存最佳模型（基于与最终提交完全一致的组合收益）
+            current_submission_return = eval_metrics.get('submission_return', -float('inf'))
+            improvement = current_submission_return - best_score
+            if improvement > config.get('early_stopping_min_delta', 0.0):
+                best_score = current_submission_return
                 best_epoch = epoch + 1
+                epochs_without_improvement = 0
                 torch.save(model.state_dict(), os.path.join(output_dir, 'best_model.pth'))
-                print(f"保存最佳模型 - final score: {best_score:.4f}")
-        print(f"\n训练完成！最佳 epoch: {best_epoch}, 最佳 final score: {best_score:.4f}")
+                print(f"保存最佳模型 - submission return: {best_score:.4f}")
+            else:
+                epochs_without_improvement += 1
+
+            # 每个完整 epoch 后保存可精确恢复的训练状态，先写临时文件再原子替换。
+            checkpoint = {
+                'completed_epochs': epoch + 1,
+                'model': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'scheduler': scheduler.state_dict(),
+                'amp_scaler': scaler.state_dict() if scaler is not None else None,
+                'best_score': best_score,
+                'best_epoch': best_epoch,
+                'epochs_without_improvement': epochs_without_improvement,
+                'config': config,
+            }
+            checkpoint_tmp = f'{checkpoint_path}.tmp'
+            torch.save(checkpoint, checkpoint_tmp)
+            os.replace(checkpoint_tmp, checkpoint_path)
+            last_completed_epoch = epoch + 1
+            print(f'训练检查点已保存: epoch {last_completed_epoch}/{config["num_epochs"]}')
+
+            if patience > 0 and epochs_without_improvement >= patience:
+                stopped_early = True
+                print(
+                    f'[EARLY STOP] 连续 {epochs_without_improvement} 个 epoch 未提升 '
+                    f'{config.get("early_stopping_min_delta", 0.0):.6f}，提前停止'
+                )
+                break
+        print(f"\n训练完成！最佳 epoch: {best_epoch}, 最佳 submission return: {best_score:.4f}")
         with open(os.path.join(output_dir, 'final_score.txt'), 'w') as f:
-            f.write(f"Best epoch: {best_epoch}\\nBest final_score: {best_score:.6f}\\n")
+            f.write(f"Best epoch: {best_epoch}\nBest submission_return: {best_score:.6f}\n")
+        with open(os.path.join(output_dir, 'training_summary.json'), 'w') as f:
+            json.dump(
+                {
+                    'completed_epochs': last_completed_epoch,
+                    'best_epoch': best_epoch,
+                    'best_submission_return': best_score,
+                    'stopped_early': stopped_early,
+                    'seed': config.get('seed'),
+                    'as_of_date': config.get('as_of_date') or str(full_df['日期'].max().date()),
+                },
+                f,
+                indent=2,
+                ensure_ascii=False,
+            )
 
         if writer:
             writer.close()
@@ -741,4 +1059,4 @@ if __name__ == "__main__":
     # 多进程保护
     mp.set_start_method('spawn', force=True)
     best_score = main()
-    print(f"\n########## 训练完成！最佳 final score: {best_score:.4f} ##########")
+    print(f"\n########## 训练完成！最佳 submission return: {best_score:.4f} ##########")

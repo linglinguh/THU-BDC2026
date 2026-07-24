@@ -10,6 +10,7 @@
 import baostock as bs
 import pandas as pd
 from datetime import datetime
+import argparse
 import os
 import time
 
@@ -216,14 +217,37 @@ def merge_stock_data(existing_df, new_df, stock_code):
     return result
 
 
+def parse_args():
+    today = pd.Timestamp.today().normalize()
+    parser = argparse.ArgumentParser(description='下载当前沪深300成分股历史行情')
+    parser.add_argument(
+        '--start-date',
+        default=(today - pd.DateOffset(years=3)).strftime('%Y-%m-%d'),
+        help='开始日期 YYYY-MM-DD；默认今天往前3年',
+    )
+    parser.add_argument(
+        '--end-date',
+        default=today.strftime('%Y-%m-%d'),
+        help='结束日期 YYYY-MM-DD；默认今天',
+    )
+    parser.add_argument(
+        '--output',
+        default='./data/stock_data.csv',
+        help='输出 CSV，默认 ./data/stock_data.csv',
+    )
+    return parser.parse_args()
+
+
 def main():
-    save_dir = "./data"
+    args = parse_args()
+    start_date = pd.to_datetime(args.start_date, errors='raise').strftime('%Y-%m-%d')
+    end_date = pd.to_datetime(args.end_date, errors='raise').strftime('%Y-%m-%d')
+    if start_date > end_date:
+        raise ValueError(f'开始日期晚于结束日期: {start_date} > {end_date}')
+
+    output_path = os.path.abspath(args.output)
+    save_dir = os.path.dirname(output_path) or '.'
     os.makedirs(save_dir, exist_ok=True)
-    
-    start_date = "2024-01-01"
-    end_date = "2026-03-15"
-    
-    output_path = os.path.join(save_dir, "stock_data.csv")
     
     print(f"目标数据时间范围: {start_date} 至 {end_date}")
     print(f"输出文件: {output_path}")

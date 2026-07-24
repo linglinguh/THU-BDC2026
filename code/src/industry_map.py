@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 # 股票代码 → 行业分类映射表
 # 来源：基于 hs300_stock_list.csv（baostock 公开数据）股票名称关键词推断
 # 分类体系：简化申万一级行业
@@ -111,3 +114,13 @@ STOCK_INDUSTRY = {
 def get_industry(code: str) -> str:
     """返回股票代码对应的行业名称，未知返回 '其他'"""
     return STOCK_INDUSTRY.get(str(code).zfill(6), "其他")
+
+
+# update_industry_map.py 生成的中证一级行业优先于旧的关键词推断表。
+_generated_path = Path(__file__).with_name("industry_map.json")
+if _generated_path.exists():
+    with _generated_path.open(encoding="utf-8") as file:
+        _generated = json.load(file)
+    STOCK_INDUSTRY.update(
+        {str(code).zfill(6): industry for code, industry in _generated["stocks"].items()}
+    )
