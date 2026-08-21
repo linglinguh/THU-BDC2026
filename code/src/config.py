@@ -1,14 +1,21 @@
+import os
+
 # 配置参数
 sequence_length = 60
 feature_num = '158+39'
 config = {
+    'seed': int(os.getenv('BDC_SEED', '42')),
     'sequence_length': sequence_length,   # 使用过去60个交易日的数据（排序任务可以用稍短的序列）
     'd_model': 256,          # Transformer输入维度
     'nhead': 4,             # 注意力头数量
     'num_layers': 3,        # Transformer层数
     'dim_feedforward': 512, # 前馈网络维度
-    'batch_size': 4,        # 排序任务batch_size可以小一些，因为每个batch包含更多股票
-    'num_epochs': 50,       # 排序任务可能需要更多epochs
+    # 8GB Apple Silicon 可通过 BDC_BATCH_SIZE=1 避免统一内存换页；正式默认仍为 4。
+    'batch_size': int(os.getenv('BDC_BATCH_SIZE', '4')),
+    # 50 epoch 已证实严重过拟合；默认最多15轮，并使用验证组合收益早停。
+    'num_epochs': int(os.getenv('BDC_NUM_EPOCHS', '15')),
+    'early_stopping_patience': int(os.getenv('BDC_EARLY_STOPPING_PATIENCE', '3')),
+    'early_stopping_min_delta': float(os.getenv('BDC_EARLY_STOPPING_MIN_DELTA', '0.0001')),
     'learning_rate': 1e-5,  # 稍微降低学习率
     'dropout': 0.1,
     'feature_num': feature_num,
@@ -26,18 +33,22 @@ config = {
     'base_weight': 1.0, # 非top-k样本权重
     'top5_weight': 2.0, # top-5样本权重（应大于base_weight）
 
-    'output_dir': f'./model/{sequence_length}_{feature_num}',
+    'output_dir': os.getenv('BDC_OUTPUT_DIR', f'./model/{sequence_length}_{feature_num}'),
     'data_path': './data',
+    # 滚动验证可指定历史截面；空字符串表示使用数据中的最新日期。
+    'as_of_date': os.getenv('BDC_AS_OF_DATE', ''),
+    'validation_months': int(os.getenv('BDC_VALIDATION_MONTHS', '2')),
 
     # 混合精度训练 (AMP)，显存减半，4GB显卡也能跑batch=2~4
     'use_amp': True,
 
-    # 推理时权重分配的 softmax 温度：越小越集中（接近 max=1），越大越均匀（趋近等权0.2）
-    'predict_temperature': 1.0,
+    # 三个非重叠 CUDA 滚动窗口的三模型集成结果显示，近等权配置
+    # 比集中持仓具有更高的跨窗口均值和更小的最差窗口回撤。
+    'predict_temperature': 100.0,
 
     # --- 推理后处理策略 ---
     # 候选池大小：从模型排名 Top-N 中做二次筛选，再取最终 Top5
-    'candidate_pool_size': 15,
+    'candidate_pool_size': 30,
 
     # 多因子评分模式（启用后替代简单筛选，对候选池各因子 z-score 后加权融合）
     'enable_multi_factor': True,
@@ -58,5 +69,5 @@ config = {
 
     # 行业分散（避免 Top5 集中在同一行业，降低组合风险）
     'enable_industry_diversify': True,
-    'industry_max_per_sector': 2,       # 同一行业最多入选 2 只
+    'industry_max_per_sector': 1,       # 同一行业最多入选 1 只
 }

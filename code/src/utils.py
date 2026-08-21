@@ -106,7 +106,7 @@ def engineer_features_39(df):
     df['obv'] = talib.OBV(close, volume)
 
     # Volume-related features
-    df['volume_change'] = volume.pct_change()
+    df['volume_change'] = volume.pct_change(fill_method=None)
     df['volume_ma_5'] = talib.SMA(volume, timeperiod=5)
     df['volume_ma_20'] = talib.SMA(volume, timeperiod=20)
     df['volume_ratio'] = df['volume_ma_5'] / df['volume_ma_20']
@@ -204,7 +204,9 @@ def engineer_features(df):
         feature_names.append(f'BETA{w}')
         
         # R-squared can be calculated as CORREL^2
-        time_period_series = pd.Series(range(w), index=close.index[:w])
+        # Correlation is invariant to a constant offset, so a full-length
+        # monotonic time axis gives a valid rolling R-squared at every row.
+        time_period_series = pd.Series(np.arange(len(close), dtype=float), index=close.index)
         rolling_corr = close.rolling(w).corr(time_period_series)
         rsquare = rolling_corr**2
         features.append(rsquare)
@@ -543,18 +545,16 @@ def create_ranking_dataset_vectorized(data, features, sequence_length, ranking_d
     # 1. 确保数据按股票和时间排序
     data = data.sort_values(['instrument', 'datetime']).reset_index(drop=True)
     
-    # 2. 确保每只股票都有 'label'（次日涨跌幅），否则无法作为 target
-    data = data.dropna(subset=['label'])
-    
-    # 3. 为每只股票生成所有滑动窗口
-    # 仅保留满足以下条件的 end_date：
-    # - 历史窗口长度满足 sequence_length
-    # - end_date 之后存在 5 条未来数据
-    # - 这 5 条未来数据在自然日上连续（任意节假日/周末导致的日期跳跃都会被过滤）
+    # 2. 为每只股票生成所有滑动窗口。Label availability is
+    # already encoded by _build_label_and_clean; do not inspect future rows a
+    # second time and never require exchange trading days to be natural-day
+    # consecutive.
     all_windows = []  # 每个元素: (end_date, stock_code, sequence, target)
 
     print("Step 1: 为每只股票生成滑动窗口...")
     grouped = data.groupby('instrument')
+    shared_calendar = pd.Index(sorted(data['datetime'].unique()))
+    calendar_position = pd.Series(np.arange(len(shared_calendar)), index=shared_calendar)
     
     for stock_code, group in tqdm(grouped, desc="Processing stocks"):
         if len(group) < sequence_length:
@@ -564,22 +564,16 @@ def create_ranking_dataset_vectorized(data, features, sequence_length, ranking_d
         feature_values = group[features].values.astype(np.float32)  # (T, F)
         labels = group['label'].values.astype(np.float32)           # (T,)
         dates = group['datetime'].values                            # (T,)
-        dates_day = group['datetime'].values.astype('datetime64[D]')
+        date_positions = group['datetime'].map(calendar_position).to_numpy(dtype=np.int64)
 
         # 生成滑动窗口：从第 sequence_length-1 行开始（0-indexed）
         num_windows = len(group) - sequence_length + 1
-        n = len(group)
         for i in range(num_windows):
             end_idx = i + sequence_length - 1
-
-            # 需要有未来 5 条数据
-            if end_idx + 5 >= n:
+            if not np.isfinite(labels[end_idx]):
                 continue
-
-            # 未来 5 条数据日期必须连续（自然日相邻）
-            future_dates = dates_day[end_idx + 1:end_idx + 6]
-            future_diffs = np.diff(future_dates).astype(np.int64)
-            if not np.all(future_diffs == 1):
+            # MASTER cross-stock attention requires identical calendar slots.
+            if not np.all(np.diff(date_positions[i:end_idx + 1]) == 1):
                 continue
 
             seq = feature_values[i : i + sequence_length]   # (L, F)

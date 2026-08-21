@@ -1,0 +1,16 @@
+services:
+  app:
+    image: bdc2026:latest
+    pull_policy: never
+    volumes:
+      - ./data:/app/data
+      - ./test/output:/app/output
+      - ./temp:/app/temp
+    working_dir: /app
+    command: /bin/bash /app/data/run.sh
+    environment:
+      BDC_NUM_EPOCHS: "1"
+      BDC_SMOKE_MAX_SAMPLES: "2"
+      BDC_SMOKE_MAX_STOCKS: "20"
+    mem_limit: 16g
+    cpus: 8.0

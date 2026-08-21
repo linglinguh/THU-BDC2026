@@ -1,148 +1,130 @@
-# THU-BigDataCompetition-2026-baseline
+# THU Big Data Challenge 2026
 
-本项目是一个面向沪深300成分股的**排序学习选股**方案：
-- 输入：每只股票过去一段时间（默认60个交易日）的量价与技术特征序列；
-- 模型：`StockTransformer`，同时建模单股票时序模式与股票间交互；
-- 输出：对同一天全部候选股票打分并排序，最终输出前5只股票（等权重0.2）。
+面向沪深 300 成分股的排序学习选股方案。模型读取每只股票过去 60 个公共交易日的量价与技术特征，同时建模单股时序和股票间关系，最终输出不超过 5 只股票及总和不超过 1 的权重。
 
----
+## 核心流程
 
-## 1. 项目目标与整体流程
+1. 从 `data/stock_data.csv` 读取历史行情；本地兼容回退到 `data/train.csv`。
+2. 按股票计算 39 或 `158+39` 组技术特征。股票代码仅作为元数据，不作为连续数值特征输入模型。
+3. 按公共交易日历构造 T+1 至 T+5 的收益标签；股票缺少任一目标交易日时，该标签无效。
+4. 以交易日为样本构造严格对齐的紧凑数据集，并训练 `StockTransformer` 排序模型。
+5. 验证和推理共用 `code/src/strategy.py`：多因子排序、行业分散、稳定 softmax 与组合合法性校验。
+6. 以验证期 `submission_return` 保存最佳模型，推理结果写入 `output/result.csv`。
 
-核心目标是学习“当天应优先持有哪些股票”的排序函数，而不是单只股票二分类。
+## 主要文件
 
-训练与推理主流程如下：
-1. 读取历史行情数据（`data/stock_data.csv`）；
-2. 做特征工程（39特征或`158+39`特征）；
-3. 构建标签：未来收益率（代码中为 `open_t1` 到 `open_t5` 的相对收益）；
-4. 按“日期”组织排序样本：每个样本是一日内多只股票的序列与目标；
-5. 训练排序模型，监控 `final_score` 并保存最优权重；
-6. 使用训练好的 `best_model.pth` + `scaler.pkl` 在最新日期上生成Top5选股结果。
+- `code/src/train.py`：特征预处理、交易日标签、对齐数据集、训练与验证。
+- `code/src/predict.py`：对齐推理序列、模型打分与结果输出。
+- `code/src/strategy.py`：训练验证和正式推理共用的组合策略。
+- `code/src/utils.py`：39/158 类技术特征工程。
+- `code/src/config.py`：模型、训练和组合策略参数。
+- `get_stock_data.py`：从 Baostock 下载沪深 300 历史行情。
+- `test/test_regressions.py`：交易日对齐、标签、特征和组合策略回归测试。
 
----
+训练产物位于 `model/`：
 
-## 2. 代码结构说明
+- `best_model.pth`
+- `scaler.pkl`
+- `config.json`
+- `final_score.txt`
+- `log/`
 
-### [config.py](config.py)
-统一管理训练与推理参数，包括：
-- 序列长度 `sequence_length`（默认60）；
-- 模型超参数（`d_model`、`nhead`、`num_layers` 等）；
-- 训练超参数（`batch_size`、`num_epochs`、`learning_rate`）；
-- 排序损失权重参数（`pairwise_weight`、`top5_weight`、`base_weight`）；
-- 数据路径和输出路径（默认输出到 `output/`）。
+## 本地运行
 
-### [model.py](model.py)
-定义核心模型 `StockTransformer`，主要由以下模块组成：
-- `PositionalEncoding`：时序位置编码；
-- 时序编码器 `TransformerEncoder`：提取单股票历史序列表示；
-- `FeatureAttention`：对时间维特征做注意力聚合；
-- `CrossStockAttention`：在同一交易日内建模股票间关系；
-- `ranking_layers` + `score_head`：输出每只股票的排序分数。
+依赖 Python 3.10–3.12、uv 和 TA-Lib 系统库。
 
-输入形状：`[batch, num_stocks, seq_len, feature_dim]`  
-输出形状：`[batch, num_stocks]`。
-
-### [utils.py](utils.py)
-包含特征工程与数据集构建逻辑：
-- `engineer_features_39()`：39个技术指标特征；
-- `engineer_features()`：158个Alpha类特征；
-- `engineer_features_158plus39()`：合并 `158 + 39` 特征；
-- `create_ranking_dataset_vectorized()`：向量化构建按日排序样本（训练核心加速点）。
-
-说明：特征工程使用了 `TA-Lib`，若未正确安装会报错。
-
-### [train.py](train.py)
-训练主脚本，关键内容：
-- 数据预处理：
-	- `_preprocess_common()`：按股票分组并行特征工程、股票ID映射、标签构建；
-	- `split_train_val_by_last_month()`：按最后阶段数据切分训练/验证集，并保留序列上下文。
-- 数据集组织：
-	- `RankingDataset` + `collate_fn`：处理每日股票数量不一致问题（padding + mask）。
-- 损失函数：`WeightedRankingLoss`
-	- 组合了 `listwise_loss` 与 `pairwise_loss`；
-	- 对真实Top-k样本施加更高权重。
-- 评估指标：`calculate_ranking_metrics()`
-	- 计算 `pred_return_sum`、`max_return_sum`、`ratio_pred`、`final_score` 等；
-	- 训练过程中以验证集 `final_score` 选择最优模型。
-
-训练产物：
-- `best_model.pth`：最佳模型参数；
-- `scaler.pkl`：标准化器；
-- `config.json`：训练时配置快照；
-- `final_score.txt`：最佳分数记录；
-- `log/`：TensorBoard日志。
-
-### [predict.py](predict.py)
-推理主脚本，流程：
-1. 加载历史数据，取最新交易日；
-2. 执行与训练一致的特征工程；
-3. 加载 `scaler.pkl` 进行特征标准化；
-4. 用 `best_model.pth` 对全部可预测股票打分；
-5. 按分数降序取前5只，输出到 `output.csv`：
-	 - `stock_id`
-	 - `weight`（固定 `0.2`）
-
-### [get_stock_data.py](get_stock_data.py)
-数据抓取脚本（Baostock）：
-- 获取沪深300成分股；
-- 抓取历史日线数据并保存为训练所需格式。
-
----
-
-## 3. 数据与输入输出约定
-
-默认训练数据文件：
-- `data/train.csv`
-
-关键列：
-- `股票代码`、`日期`、`开盘`、`收盘`、`最高`、`最低`、`成交量`、`成交额`、`换手率`、`涨跌幅` 等。
-
-预测输出文件：
-- output目录下 `result.csv`（由 `predict.py` 生成）。
-
----
-
-## 4. 运行方法（推荐使用 uv）
-
-1) 使用 `uv` 安装依赖
-
-`uv sync`
-
-2) 激活虚拟环境
-
-`source .venv/bin/activate`
-
-3) 训练模型
-
-```
+```bash
+uv sync --frozen
 sh train.sh
-```
-
-4) 生成预测结果
-
-```
 sh test.sh
 ```
 
----
+下载指定时间范围的数据：
 
-## 5. 常见问题
-
-1) `TA-Lib` 安装失败  
-本项目特征工程依赖 `TA-Lib`，需要先安装系统层面的 `ta-lib` 库，再安装Python包。
-```
-wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
-    tar -xzf ta-lib-0.4.0-src.tar.gz && \
-    cd ta-lib && \
-    ./configure --prefix=/usr && \
-    make -j1 && \
-    make install && \
-    cd .. && \
-    rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
+```bash
+.venv/bin/python get_stock_data.py \
+  --start-date 2023-07-23 \
+  --end-date 2026-07-23 \
+  --output data/stock_data.csv
 ```
 
-2) 多进程相关问题  
-`train.py` 与 `predict.py` 均在入口使用了 `spawn` 模式，Linux/macOS下请保持通过脚本入口运行（不要在交互式环境里直接多进程调用主逻辑）。
+不传日期时，结束日默认为当天，开始日默认为结束日前 3 年。
 
-3) GPU/CPU自动选择  
-代码会按 `CUDA -> MPS -> CPU` 顺序自动选择设备；无GPU时可直接CPU运行。
+## 测试
+
+快速回归：
+
+```bash
+.venv/bin/python -m unittest discover -s test -p 'test_regressions.py' -v
+.venv/bin/python test/score_self.py
+```
+
+`test/score_self.py` 仅适用于 `data/test.csv` 覆盖预测组合中每只股票后续完整
+5 个交易日的历史回放；对尚无未来标签的正式提交结果只执行格式与组合合法性校验。
+
+真实数据小规模训练—预测烟测：
+
+```bash
+BDC_NUM_EPOCHS=1 \
+BDC_SMOKE_MAX_SAMPLES=2 \
+BDC_SMOKE_MAX_STOCKS=20 \
+  .venv/bin/python code/src/train.py
+.venv/bin/python code/src/predict.py
+```
+
+烟测变量仅用于本地验证；不设置时默认执行全量股票、全量日期和最多 15 个 epoch，
+并按验证组合收益早停。
+在 8GB Apple Silicon 上可设置 `BDC_BATCH_SIZE=1` 避免 MPS 统一内存换页；
+它只改变梯度更新的批大小，不会裁剪股票、日期或 epoch。
+
+每个完整 epoch 会写入 `training_checkpoint.pth`。中断后可精确续训：
+
+```bash
+BDC_BATCH_SIZE=1 \
+BDC_RESUME_CHECKPOINT=model/60_158+39/training_checkpoint.pth \
+  .venv/bin/python code/src/train.py
+```
+
+旧版本若只有 `best_model.pth`，可以通过 `BDC_RESUME_FROM_BEST=1` 和
+`BDC_RESUME_EPOCH` 从最佳权重继续，但优化器动量会重新初始化。
+
+滚动验证会自动跳过已完成实验，并从未完成目录中的
+`training_checkpoint.pth` 续跑：
+
+```bash
+.venv/bin/python run_walk_forward.py
+```
+
+保存模型后可在同一历史截面上校准组合后处理参数。工具会分别评估各模型和
+截面标准化集成，并输出完整搜索结果：
+
+```bash
+.venv/bin/python run_strategy_search.py \
+  model/walk_forward/asof_20260323/seed_42 \
+  model/walk_forward/asof_20260323/seed_2026 \
+  --output model/strategy_search/asof_20260323.csv
+```
+
+组合策略参数改变后，旧检查点中的最佳验证分数已不可比较；续训应使用新的
+`BDC_OUTPUT_DIR`，或对滚动实验显式使用 `--force` 从头训练。
+
+## Docker 全流程烟测
+
+CPU 镜像适合本地或 Apple Silicon 验证：
+
+```bash
+docker build \
+  --build-arg CPU_ONLY=1 \
+  -t bdc2026:latest .
+docker compose -f docker-compose.smoke.yml up --abort-on-container-exit
+docker compose -f docker-compose.smoke.yml down
+```
+
+正式镜像不传 `CPU_ONLY=1`，将使用 `uv.lock` 中冻结的 CUDA 依赖。网络受限时可通过 `BASE_IMAGE` 和 `DEBIAN_MIRROR` 构建参数指定镜像源。
+
+## 提交前检查
+
+- 使用赛事最新挂载数据，或先更新 `data/stock_data.csv`；不要用过期行情生成正式结果。
+- 取消所有 `BDC_SMOKE_*` 环境变量并完成正式训练。
+- 在与比赛一致的 Docker 环境中执行 `data/run.sh`，以 Docker 生成的 `output/result.csv` 为准。
+- 确认结果股票代码唯一、权重为有限非负数、股票数不超过 5、权重和不超过 1。
